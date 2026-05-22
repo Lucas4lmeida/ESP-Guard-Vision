@@ -1,0 +1,241 @@
+dependencies:
+  espressif/dl_fft:
+    component_hash: ced3cf28cc70452b7859c06f4e5059215167254a2047e34c893d6f501ccd6ea2
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.4.0
+  espressif/esp-dl:
+    component_hash: a8ab6c5317b213da00da7d62957243c01937d70c5c2e8c50dc0f5e985d8a8c1c
+    dependencies:
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.3.1'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: ==1.8.0
+    - name: espressif/esp_new_jpeg
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1
+    - name: idf
+      require: private
+      version: '*'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32p4
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    version: 3.3.3
+  espressif/esp-dsp:
+    component_hash: 12e44db246517a627bc0fe2b255b8335410c0215c98bfba2df5a8e3edea839ef
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.8.0
+  espressif/esp32-camera:
+    component_hash: 2b75f6f0c987fb0e3687ccbd464cd00c163ea8cb05d2470cfb05adf6535bc488
+    dependencies:
+    - name: espressif/esp_jpeg
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.3.1
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.1.6
+  espressif/esp_jpeg:
+    component_hash: defb83669293cbf86d0fa86b475ba5517aceed04ed70db435388c151ab37b5d7
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.3.1
+  espressif/esp_new_jpeg:
+    component_hash: 98823384f51ca298e2c9bebacd1c629148e528ed0902d18b16556df151519e68
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h4
+    version: 1.0.1
+  espressif/ethernet_init:
+    component_hash: b7303f1482091766b9b653ec8332775a9485f4df3c69141577de82847c4d2adf
+    dependencies:
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_CH390} == 1
+      name: espressif/ch390
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_DM9051} == 1
+      name: espressif/dm9051
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      version: '*'
+    - matches:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      name: espressif/dp83848
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_DP83848} == 1
+      version: '*'
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_ENC28J60} == 1
+      name: espressif/enc28j60
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - matches:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      name: espressif/ip101
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_IP101} == 1
+      version: '*'
+    - matches:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      name: espressif/ksz80xx
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_KSZ80XX} == 1
+      version: '*'
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_KSZ8851SNL} == 1
+      name: espressif/ksz8851snl
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      version: '*'
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_LAN865X} == 1
+      name: espressif/lan865x
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^0.1.1
+    - name: espressif/lan867x
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_LAN867X} == 1
+      version: '>=2.0.0'
+    - matches:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      name: espressif/lan87xx
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_LAN87XX} == 1
+      version: '*'
+    - matches:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      name: espressif/rtl8201
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32p4]
+      - if: $CONFIG{ETHERNET_PHY_USE_RTL8201} == 1
+      version: '*'
+    - matches:
+      - if: $CONFIG{ETHERNET_SPI_USE_W5500} == 1
+      name: espressif/w5500
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=6.0
+        version: ^1.0.0
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=5.4.3,!=5.5.0,!=5.5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0
+  espressif/pedestrian_detect:
+    component_hash: 882a6986cb5e7e9bb8e87861fb42379a7eeb2f4a4a78104c6a78f42a6cb35fb4
+    dependencies:
+    - name: espressif/esp-dl
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~3.3.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.3.2
+  idf:
+    source:
+      type: idf
+    version: 6.0.1
+  protocol_examples_common:
+    dependencies:
+    - name: espressif/ethernet_init
+      rules:
+      - if: target != linux
+      version: ~1.2.0
+    source:
+      path: ..\..\..\esp\v6.0.1\esp-idf\examples\common_components\protocol_examples_common
+      type: local
+    version: '*'
+direct_dependencies:
+- espressif/esp-dl
+- espressif/esp32-camera
+- espressif/pedestrian_detect
+- protocol_examples_common
+manifest_hash: 04ebddb9857579e537ee9469f791ab58e77e92c1dfd01e4e7dfe62f08d6033f3
+target: esp32s3
+version: 3.0.0
