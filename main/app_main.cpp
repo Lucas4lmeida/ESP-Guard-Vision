@@ -9,6 +9,7 @@
 #include "pedestrian_detect.hpp"
 #include "img_converters.h"
 #include "esp_heap_caps.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "face_test";
 static PedestrianDetect *s_detect = nullptr;
@@ -30,6 +31,13 @@ static PedestrianDetect *s_detect = nullptr;
 #define CAM_PIN_VSYNC   6
 #define CAM_PIN_HREF    7
 #define CAM_PIN_PCLK   13
+
+//Pinos I2C do Sensor de Proximidade (VL53L0/IXV2)
+#define SENSOR_PIN_SDA 14
+#define SENSOR_PIN_SCL 21
+
+//Botão na placa
+#define BUTTON_GPIO 46
 
 static esp_err_t camera_init(void)
 {
@@ -59,6 +67,16 @@ static esp_err_t camera_init(void)
     };
     return esp_camera_init(&cfg);
 }
+
+void configure_button() {
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = (1ULL << BUTTON_GPIO);
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    gpio_config(&io_conf);
+}
+int button_state = gpio_get_level((gpio_num_t)BUTTON_GPIO);
 
 static esp_err_t face_handler(httpd_req_t *req)
 {
@@ -146,6 +164,10 @@ extern "C" void app_main(void)
     if (!start_server()) {
         ESP_LOGE(TAG, "HTTP server falhou");
         return;
+    }
+
+    if (button_state == 0){
+        ESP_LOGE(TAG, "Botão Pressionado");
     }
     ESP_LOGI(TAG, "OK. GET http://<ip>/face");
 }

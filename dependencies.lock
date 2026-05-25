@@ -1,4 +1,70 @@
 dependencies:
+  espp/base_component:
+    component_hash: 8ce5e30215ef1a664ae8967908c1755c43ea0338b6814ffe6a0ba94969412062
+    dependencies:
+    - name: espp/logger
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.36
+  espp/base_peripheral:
+    component_hash: 4930445404739cf2d6c3f0c58817710d13c65dfdcf3b09f2bf98fb6132376e1e
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.36
+  espp/format:
+    component_hash: 6a1b3b8548c903f52c1942c16d796bb946da7c2866e86d17cc8d44b746ee7753
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.36
+  espp/logger:
+    component_hash: afd6709bfc54ba3f88387a1070ffe470253451c1e761a11228019e98ef90a0d9
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.36
+  espp/vl53l:
+    component_hash: 3084376044c3c80e02b4b7fe09f82e41df74a032f19508998bbc214599f606b5
+    dependencies:
+    - name: espp/base_peripheral
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.36
   espressif/dl_fft:
     component_hash: ced3cf28cc70452b7859c06f4e5059215167254a2047e34c893d6f501ccd6ea2
     dependencies:
@@ -10,7 +76,7 @@ dependencies:
       type: service
     version: 0.4.0
   espressif/esp-dl:
-    component_hash: a8ab6c5317b213da00da7d62957243c01937d70c5c2e8c50dc0f5e985d8a8c1c
+    component_hash: b29ff922b27024ba942148e2309a4794163072b88165c8b8e34973ee5d4ef80a
     dependencies:
     - name: espressif/dl_fft
       registry_url: https://components.espressif.com
@@ -40,7 +106,7 @@ dependencies:
     - esp32s2
     - esp32s3
     - esp32s31
-    version: 3.3.3
+    version: 3.3.4
   espressif/esp-dsp:
     component_hash: 12e44db246517a627bc0fe2b255b8335410c0215c98bfba2df5a8e3edea839ef
     dependencies:
@@ -232,10 +298,11 @@ dependencies:
       type: local
     version: '*'
 direct_dependencies:
+- espp/vl53l
 - espressif/esp-dl
 - espressif/esp32-camera
 - espressif/pedestrian_detect
 - protocol_examples_common
-manifest_hash: 04ebddb9857579e537ee9469f791ab58e77e92c1dfd01e4e7dfe62f08d6033f3
+manifest_hash: f74a861b7556c39a6b57e0bcb5485f5d196eee99a8ea93a1fefa7a382ef7d1f9
 target: esp32s3
 version: 3.0.0
