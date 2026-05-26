@@ -1,20 +1,22 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_camera.h"
+#include "img_converters.h"
 #include "esp_http_server.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "protocol_examples_common.h"
 #include "pedestrian_detect.hpp"
-#include "img_converters.h"
-#include "esp_heap_caps.h"
-#include "driver/gpio.h"
 
-static const char *TAG = "face_test";
+static const char *TAG = "guard";
 static PedestrianDetect *s_detect = nullptr;
 
-// --- Pinos da câmera (ESP32-S3-EYE) - AJUSTE PARA SUA PLACA ---
+// Se as cores saírem trocadas no navegador, muda pra 1 (byte swap do RGB565)
+#define SWAP_RGB565_BYTES 0
+
+// --- Pinos da câmera (ESP32-S3-EYE) ---
 #define CAM_PIN_PWDN   -1
 #define CAM_PIN_RESET  -1
 #define CAM_PIN_XCLK   15
@@ -32,13 +34,6 @@ static PedestrianDetect *s_detect = nullptr;
 #define CAM_PIN_HREF    7
 #define CAM_PIN_PCLK   13
 
-//Pinos I2C do Sensor de Proximidade (VL53L0/IXV2)
-#define SENSOR_PIN_SDA 14
-#define SENSOR_PIN_SCL 21
-
-//Botão na placa
-#define BUTTON_GPIO 46
-
 static esp_err_t camera_init(void)
 {
     camera_config_t cfg = {
@@ -54,29 +49,45 @@ static esp_err_t camera_init(void)
         .pin_vsync = CAM_PIN_VSYNC,
         .pin_href  = CAM_PIN_HREF,
         .pin_pclk  = CAM_PIN_PCLK,
-        .xclk_freq_hz = 24000000,             // OV5640 precisa de 24MHz
+        .xclk_freq_hz = 24000000,
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
-        .pixel_format = PIXFORMAT_JPEG,       // OV5640 instável em RGB565
-        .frame_size   = FRAMESIZE_VGA,       // 320x240
-        .jpeg_quality = 15,
+        .pixel_format = PIXFORMAT_RGB565,     // raw: caminho confiável do OV5640
+        .frame_size   = FRAMESIZE_QVGA,       // 320x240
+        .jpeg_quality = 12,
         .fb_count     = 2,
         .fb_location  = CAMERA_FB_IN_PSRAM,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
-        .sccb_i2c_port = -1
+        .sccb_i2c_port = -1,
     };
     return esp_camera_init(&cfg);
 }
 
-void configure_button() {
-    gpio_config_t io_conf = {};
-    io_conf.pin_bit_mask = (1ULL << BUTTON_GPIO);
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    gpio_config(&io_conf);
+// Página com auto-refresh do feed
+static esp_err_t index_handler(httpd_req_t *req)
+{
+    static const char html[] =
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<title>ESP Guard Vision</title>"
+        "<style>body{background:#111;color:#eee;font-family:sans-serif;text-align:center}"
+        "img{max-width:95vw;border:2px solid #0f0;margin-top:10px}"
+        "#st{font-size:1.2em;margin:8px}</style></head>"
+        "<body><h2>ESP Guard Vision</h2>"
+        "<p id='st'>aguardando...</p><img id='f'>"
+        "<script>"
+        "function tick(){"
+        " fetch('/face?'+Date.now()).then(r=>{"
+        "  if(r.status===200){return r.blob().then(b=>{"
+        "   document.getElementById('f').src=URL.createObjectURL(b);"
+        "   document.getElementById('st').textContent='PESSOA DETECTADA';});}"
+        "  else{document.getElementById('st').textContent='sem pessoa';}"
+        " }).catch(()=>{document.getElementById('st').textContent='...';});"
+        "}"
+        "setInterval(tick,700);tick();"
+        "</script></body></html>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
 }
-int button_state = gpio_get_level((gpio_num_t)BUTTON_GPIO);
 
 static esp_err_t face_handler(httpd_req_t *req)
 {
@@ -87,26 +98,15 @@ static esp_err_t face_handler(httpd_req_t *req)
         return httpd_resp_send(req, NULL, 0);
     }
 
-    // Decodifica JPEG -> RGB888 pro detector
-    size_t rgb_len = (size_t)fb->width * fb->height * 3;
-    uint8_t *rgb = (uint8_t *)heap_caps_malloc(rgb_len, MALLOC_CAP_SPIRAM);
-    if (!rgb || !fmt2rgb888(fb->buf, fb->len, fb->format, rgb)) {
-        ESP_LOGE(TAG, "fmt2rgb888 falhou");
-        if (rgb) free(rgb);
-        esp_camera_fb_return(fb);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-
+    // Detecção direto no RGB565 (sem cópia, sem perda de desempenho)
     dl::image::img_t img = {
-        .data     = rgb,
+        .data     = fb->buf,
         .width    = (uint16_t)fb->width,
         .height   = (uint16_t)fb->height,
-        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB888,
+        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
     };
 
     auto &results = s_detect->run(img);
-    free(rgb);
 
     if (results.empty()) {
         esp_camera_fb_return(fb);
@@ -119,11 +119,31 @@ static esp_err_t face_handler(httpd_req_t *req)
                  r.score, r.box[0], r.box[1], r.box[2], r.box[3]);
     }
 
-    // fb->buf JÁ é JPEG — manda direto, sem reconverter
+#if SWAP_RGB565_BYTES
+    // Só pra correção de cor no JPEG; a detecção já rodou antes disso
+    uint8_t *p = fb->buf;
+    for (size_t i = 0; i + 1 < fb->len; i += 2) {
+        uint8_t t = p[i]; p[i] = p[i + 1]; p[i + 1] = t;
+    }
+#endif
+
+    // RGB565 -> JPEG por software (encoder na CPU, não no sensor)
+    uint8_t *jpg = NULL;
+    size_t   jpg_len = 0;
+    bool ok = fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
+                      PIXFORMAT_RGB565, 80, &jpg, &jpg_len);
+    esp_camera_fb_return(fb);
+
+    if (!ok) {
+        ESP_LOGE(TAG, "fmt2jpg falhou");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    esp_err_t rc = httpd_resp_send(req, (const char *)fb->buf, fb->len);
-    esp_camera_fb_return(fb);
+    esp_err_t rc = httpd_resp_send(req, (const char *)jpg, jpg_len);
+    free(jpg);
     return rc;
 }
 
@@ -135,13 +155,10 @@ static httpd_handle_t start_server(void)
 
     if (httpd_start(&srv, &cfg) != ESP_OK) return NULL;
 
-    httpd_uri_t uri = {
-        .uri      = "/face",
-        .method   = HTTP_GET,
-        .handler  = face_handler,
-        .user_ctx = NULL,
-    };
-    httpd_register_uri_handler(srv, &uri);
+    httpd_uri_t index_uri = { .uri = "/",     .method = HTTP_GET, .handler = index_handler, .user_ctx = NULL };
+    httpd_uri_t face_uri  = { .uri = "/face", .method = HTTP_GET, .handler = face_handler,  .user_ctx = NULL };
+    httpd_register_uri_handler(srv, &index_uri);
+    httpd_register_uri_handler(srv, &face_uri);
     return srv;
 }
 
@@ -150,24 +167,22 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(example_connect());     // WiFi/Eth via menuconfig
+    ESP_ERROR_CHECK(example_connect());
+    esp_wifi_set_ps(WIFI_PS_NONE);           // banda de rede estável
 
     ESP_ERROR_CHECK(camera_init());
 
-    for (int i = 0; i < 3; i++) {
+    // Warm-up: descarta frames iniciais do OV5640
+    for (int i = 0; i < 5; i++) {
         camera_fb_t *wfb = esp_camera_fb_get();
         if (wfb) esp_camera_fb_return(wfb);
     }
 
-    s_detect = new PedestrianDetect();       // usa o modelo do Kconfig
+    s_detect = new PedestrianDetect();       // modelo via Kconfig (RODATA)
 
     if (!start_server()) {
         ESP_LOGE(TAG, "HTTP server falhou");
         return;
     }
-
-    if (button_state == 0){
-        ESP_LOGE(TAG, "Botão Pressionado");
-    }
-    ESP_LOGI(TAG, "OK. GET http://<ip>/face");
+    ESP_LOGI(TAG, "OK. Abra http://<ip>/ no navegador");
 }
