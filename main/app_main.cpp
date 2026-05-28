@@ -49,11 +49,11 @@ static esp_err_t camera_init(void)
         .pin_vsync = CAM_PIN_VSYNC,
         .pin_href  = CAM_PIN_HREF,
         .pin_pclk  = CAM_PIN_PCLK,
-        .xclk_freq_hz = 24000000,
+        .xclk_freq_hz = 20000000,
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
-        .pixel_format = PIXFORMAT_RGB565,     // raw: caminho confiável do OV5640
-        .frame_size   = FRAMESIZE_QVGA,       // 320x240
+        .pixel_format = PIXFORMAT_RGB565, 
+        .frame_size   = FRAMESIZE_QVGA,      
         .jpeg_quality = 12,
         .fb_count     = 2,
         .fb_location  = CAMERA_FB_IN_PSRAM,
@@ -131,7 +131,7 @@ static esp_err_t face_handler(httpd_req_t *req)
     uint8_t *jpg = NULL;
     size_t   jpg_len = 0;
     bool ok = fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
-                      PIXFORMAT_RGB565, 80, &jpg, &jpg_len);
+                      PIXFORMAT_RGB565, 75, &jpg, &jpg_len);
     esp_camera_fb_return(fb);
 
     if (!ok) {
@@ -169,14 +169,8 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(example_connect());
     esp_wifi_set_ps(WIFI_PS_NONE);           // banda de rede estável
-
     ESP_ERROR_CHECK(camera_init());
 
-    // Warm-up: descarta frames iniciais do OV5640
-    for (int i = 0; i < 5; i++) {
-        camera_fb_t *wfb = esp_camera_fb_get();
-        if (wfb) esp_camera_fb_return(wfb);
-    }
 
     s_detect = new PedestrianDetect();       // modelo via Kconfig (RODATA)
 
