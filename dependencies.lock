@@ -228,7 +228,7 @@ dependencies:
       - if: target != linux
       version: ~1.2.0
     source:
-      path: ..\..\..\esp\v6.0.1\esp-idf\examples\common_components\protocol_examples_common
+      path: ..\..\..\..\..\esp\v6.0.1\esp-idf\examples\common_components\protocol_examples_common
       type: local
     version: '*'
 direct_dependencies:
