@@ -53,7 +53,7 @@ static esp_err_t camera_init(void)
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_RGB565, 
-        .frame_size   = FRAMESIZE_QVGA,      
+        .frame_size   = FRAMESIZE_VGA,      
         .jpeg_quality = 12,
         .fb_count     = 2,
         .fb_location  = CAMERA_FB_IN_PSRAM,
@@ -83,7 +83,7 @@ static esp_err_t index_handler(httpd_req_t *req)
         "  else{document.getElementById('st').textContent='sem pessoa';}"
         " }).catch(()=>{document.getElementById('st').textContent='...';});"
         "}"
-        "setInterval(tick,700);tick();"
+        "setInterval(tick,500);tick();"
         "</script></body></html>";
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
@@ -98,7 +98,6 @@ static esp_err_t face_handler(httpd_req_t *req)
         return httpd_resp_send(req, NULL, 0);
     }
 
-    // Detecção direto no RGB565 (sem cópia, sem perda de desempenho)
     dl::image::img_t img = {
         .data     = fb->buf,
         .width    = (uint16_t)fb->width,
@@ -120,14 +119,14 @@ static esp_err_t face_handler(httpd_req_t *req)
     }
 
 #if SWAP_RGB565_BYTES
-    // Só pra correção de cor no JPEG; a detecção já rodou antes disso
+    // Só pra correção de cor no JPEG
     uint8_t *p = fb->buf;
     for (size_t i = 0; i + 1 < fb->len; i += 2) {
         uint8_t t = p[i]; p[i] = p[i + 1]; p[i + 1] = t;
     }
 #endif
 
-    // RGB565 -> JPEG por software (encoder na CPU, não no sensor)
+    // RGB565 -> JPEG por software
     uint8_t *jpg = NULL;
     size_t   jpg_len = 0;
     bool ok = fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
@@ -168,7 +167,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(example_connect());
-    esp_wifi_set_ps(WIFI_PS_NONE);           // banda de rede estável
+    esp_wifi_set_ps(WIFI_PS_NONE);           // Modo de alto desempenho do WIFI
     ESP_ERROR_CHECK(camera_init());
 
 
