@@ -1,11 +1,12 @@
 /**
- * Firmware KIIRA – ESP32‑S3 (compatível com ESP‑IDF v6.0.1)
- * - WiFi Manager com portal web para credenciais
+ * Firmware KIIRA – ESP32‑S3 (Compatível com ESP‑IDF v6.0.1)
+ * - WiFi Manager com portal web para credenciais e IP do Backend
  * - Detecção de pedestres (PedestrianDetect)
  * - Buzzer PWM no pino GPIO3
  * - Display OLED SSD1306 via I2C0 (GPIO14/21)
- * - Armazenamento no MicroSD das imagens com detecção
- * - Upload para backend FastAPI
+ * - Câmera OV5640 via I2C1 com correções de artefatos e endianness
+ * - Armazenamento no MicroSD com proteção contra remoção
+ * - Upload para backend FastAPI com retentativas e monitoramento
  */
 
 #include <string.h>
@@ -56,10 +57,10 @@ static char device_id_str[18] = {0};
 #define SDMMC_CMD_PIN       GPIO_NUM_38
 #define SDMMC_D0_PIN        GPIO_NUM_40
 
-// URLs do backend
-#define BACKEND_URL         "http://10.48.219.195:8000"
+// Endpoints do backend
 #define UPLOAD_ENDPOINT     "/upload"
 #define CONFIG_ENDPOINT     "/config"
+#define BACKEND_PORT        8000
 
 // Parâmetros ajustáveis
 static float min_score       = 0.5f;
@@ -68,13 +69,13 @@ static bool  enable_detection = true;
 
 // WiFi Manager
 #define WIFI_AP_SSID         "KIIRA-Config"
-#define WIFI_AP_PASS         NULL
 #define WIFI_CONNECT_TIMEOUT_MS  15000
 #define MAX_SSID_LEN         32
 #define MAX_PASS_LEN         64
 #define NVS_NAMESPACE        "wifi"
 #define NVS_KEY_SSID         "ssid"
 #define NVS_KEY_PASS         "pass"
+#define NVS_KEY_BACKEND_IP   "backend_ip"
 
 typedef enum {
     WIFI_STATE_INIT,
@@ -82,9 +83,11 @@ typedef enum {
     WIFI_STATE_STA_CONNECTED,
     WIFI_STATE_AP_CONFIG
 } wifi_state_t;
+
 static wifi_state_t wifi_state = WIFI_STATE_INIT;
 static char g_ssid[33] = "?";
 static char g_ip[16]   = "?.?.?.?";
+static char g_backend_ip[32] = "192.168.1.127"; // IP Padrão
 static wifi_state_t g_display_state = WIFI_STATE_INIT;
 static float g_last_score = 0.0;
 static bool  g_detected   = false;
@@ -94,15 +97,115 @@ static volatile bool should_restart = false;
 static bool sd_mounted = false;
 static SemaphoreHandle_t sd_mutex = NULL;
 
-// Fonte 8x8 (inserir a tabela completa de 96 caracteres)
-static const uint8_t font8x8[96][8] = { /* ... */ };
+// Backend Status
+static int backend_fail_count = 0;
+static bool backend_offline = false;
 
-// ---------- Novo I2C ----------
+// Fonte 8x8 Completa (96 caracteres ASCII imprimíveis)
+static const uint8_t font8x8[96][8] = {
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0020 (space)
+ { 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00},   // U+0021 (!)
+ { 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0022 (")
+ { 0x36, 0x36, 0x7F, 0x36, 0x7F, 0x36, 0x36, 0x00},   // U+0023 (#)
+ { 0x0C, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x0C, 0x00},   // U+0024 ($)
+ { 0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00},   // U+0025 (%)
+ { 0x1C, 0x36, 0x1C, 0x6E, 0x3B, 0x33, 0x6E, 0x00},   // U+0026 (&)
+ { 0x06, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0027 (')
+ { 0x18, 0x0C, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x00},   // U+0028 (()
+ { 0x06, 0x0C, 0x18, 0x18, 0x18, 0x0C, 0x06, 0x00},   // U+0029 ())
+ { 0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00},   // U+002A (*)
+ { 0x00, 0x0C, 0x0C, 0x3F, 0x0C, 0x0C, 0x00, 0x00},   // U+002B (+)
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x06},   // U+002C (,)
+ { 0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00},   // U+002D (-)
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00},   // U+002E (.)
+ { 0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x01, 0x00},   // U+002F (/)
+ { 0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00},   // U+0030 (0)
+ { 0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F, 0x00},   // U+0031 (1)
+ { 0x1E, 0x33, 0x30, 0x1C, 0x06, 0x33, 0x3F, 0x00},   // U+0032 (2)
+ { 0x1E, 0x33, 0x30, 0x1C, 0x30, 0x33, 0x1E, 0x00},   // U+0033 (3)
+ { 0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x78, 0x00},   // U+0034 (4)
+ { 0x3F, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E, 0x00},   // U+0035 (5)
+ { 0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x1E, 0x00},   // U+0036 (6)
+ { 0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x00},   // U+0037 (7)
+ { 0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00},   // U+0038 (8)
+ { 0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00},   // U+0039 (9)
+ { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x00},   // U+003A (:)
+ { 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x06},   // U+003B (;)
+ { 0x18, 0x0C, 0x06, 0x03, 0x06, 0x0C, 0x18, 0x00},   // U+003C (<)
+ { 0x00, 0x00, 0x3F, 0x00, 0x00, 0x3F, 0x00, 0x00},   // U+003D (=)
+ { 0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00},   // U+003E (>)
+ { 0x1E, 0x33, 0x30, 0x18, 0x0C, 0x00, 0x0C, 0x00},   // U+003F (?)
+ { 0x3E, 0x63, 0x7B, 0x7B, 0x7B, 0x03, 0x1E, 0x00},   // U+0040 (@)
+ { 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00},   // U+0041 (A)
+ { 0x3F, 0x66, 0x66, 0x3E, 0x66, 0x66, 0x3F, 0x00},   // U+0042 (B)
+ { 0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00},   // U+0043 (C)
+ { 0x1F, 0x36, 0x66, 0x66, 0x66, 0x36, 0x1F, 0x00},   // U+0044 (D)
+ { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x46, 0x7F, 0x00},   // U+0045 (E)
+ { 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x06, 0x0F, 0x00},   // U+0046 (F)
+ { 0x3C, 0x66, 0x03, 0x03, 0x73, 0x66, 0x7C, 0x00},   // U+0047 (G)
+ { 0x33, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x33, 0x00},   // U+0048 (H)
+ { 0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0049 (I)
+ { 0x78, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E, 0x00},   // U+004A (J)
+ { 0x67, 0x66, 0x36, 0x1E, 0x36, 0x66, 0x67, 0x00},   // U+004B (K)
+ { 0x0F, 0x06, 0x06, 0x06, 0x46, 0x66, 0x7F, 0x00},   // U+004C (L)
+ { 0x63, 0x77, 0x7F, 0x7F, 0x6B, 0x63, 0x63, 0x00},   // U+004D (M)
+ { 0x63, 0x67, 0x6F, 0x7B, 0x73, 0x63, 0x63, 0x00},   // U+004E (N)
+ { 0x1C, 0x36, 0x63, 0x63, 0x63, 0x36, 0x1C, 0x00},   // U+004F (O)
+ { 0x3F, 0x66, 0x66, 0x3E, 0x06, 0x06, 0x0F, 0x00},   // U+0050 (P)
+ { 0x1E, 0x33, 0x33, 0x33, 0x3B, 0x1E, 0x38, 0x00},   // U+0051 (Q)
+ { 0x3F, 0x66, 0x66, 0x3E, 0x36, 0x66, 0x67, 0x00},   // U+0052 (R)
+ { 0x1E, 0x33, 0x07, 0x0E, 0x38, 0x33, 0x1E, 0x00},   // U+0053 (S)
+ { 0x3F, 0x2D, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0054 (T)
+ { 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x3F, 0x00},   // U+0055 (U)
+ { 0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00},   // U+0056 (V)
+ { 0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00},   // U+0057 (W)
+ { 0x63, 0x63, 0x36, 0x1C, 0x1C, 0x36, 0x63, 0x00},   // U+0058 (X)
+ { 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x0C, 0x1E, 0x00},   // U+0059 (Y)
+ { 0x7F, 0x63, 0x31, 0x18, 0x4C, 0x66, 0x7F, 0x00},   // U+005A (Z)
+ { 0x1E, 0x06, 0x06, 0x06, 0x06, 0x06, 0x1E, 0x00},   // U+005B ([)
+ { 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x40, 0x00},   // U+005C (\)
+ { 0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00},   // U+005D (])
+ { 0x08, 0x1C, 0x36, 0x63, 0x00, 0x00, 0x00, 0x00},   // U+005E (^)
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF},   // U+005F (_)
+ { 0x0C, 0x0C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0060 (`)
+ { 0x00, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00},   // U+0061 (a)
+ { 0x07, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3B, 0x00},   // U+0062 (b)
+ { 0x00, 0x00, 0x1E, 0x33, 0x03, 0x33, 0x1E, 0x00},   // U+0063 (c)
+ { 0x38, 0x30, 0x30, 0x3E, 0x33, 0x33, 0x6E, 0x00},   // U+0064 (d)
+ { 0x00, 0x00, 0x1E, 0x33, 0x3F, 0x03, 0x1E, 0x00},   // U+0065 (e)
+ { 0x1C, 0x36, 0x06, 0x0F, 0x06, 0x06, 0x0F, 0x00},   // U+0066 (f)
+ { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x1F},   // U+0067 (g)
+ { 0x07, 0x06, 0x36, 0x6E, 0x66, 0x66, 0x67, 0x00},   // U+0068 (h)
+ { 0x0C, 0x00, 0x0E, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+0069 (i)
+ { 0x30, 0x00, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E},   // U+006A (j)
+ { 0x07, 0x06, 0x66, 0x36, 0x1E, 0x36, 0x67, 0x00},   // U+006B (k)
+ { 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00},   // U+006C (l)
+ { 0x00, 0x00, 0x33, 0x7F, 0x7F, 0x6B, 0x63, 0x00},   // U+006D (m)
+ { 0x00, 0x00, 0x1F, 0x33, 0x33, 0x33, 0x33, 0x00},   // U+006E (n)
+ { 0x00, 0x00, 0x1E, 0x33, 0x33, 0x33, 0x1E, 0x00},   // U+006F (o)
+ { 0x00, 0x00, 0x3B, 0x66, 0x66, 0x3E, 0x06, 0x0F},   // U+0070 (p)
+ { 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x78},   // U+0071 (q)
+ { 0x00, 0x00, 0x3B, 0x6E, 0x66, 0x06, 0x0F, 0x00},   // U+0072 (r)
+ { 0x00, 0x00, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x00},   // U+0073 (s)
+ { 0x08, 0x0C, 0x3E, 0x0C, 0x0C, 0x2C, 0x18, 0x00},   // U+0074 (t)
+ { 0x00, 0x00, 0x33, 0x33, 0x33, 0x33, 0x6E, 0x00},   // U+0075 (u)
+ { 0x00, 0x00, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00},   // U+0076 (v)
+ { 0x00, 0x00, 0x63, 0x6B, 0x7F, 0x7F, 0x36, 0x00},   // U+0077 (w)
+ { 0x00, 0x00, 0x63, 0x36, 0x1C, 0x36, 0x63, 0x00},   // U+0078 (x)
+ { 0x00, 0x00, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x1F},   // U+0079 (y)
+ { 0x00, 0x00, 0x3F, 0x19, 0x0C, 0x26, 0x3F, 0x00},   // U+007A (z)
+ { 0x38, 0x0C, 0x0C, 0x07, 0x0C, 0x0C, 0x38, 0x00},   // U+007B ({)
+ { 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00},   // U+007C (|)
+ { 0x07, 0x0C, 0x0C, 0x38, 0x0C, 0x0C, 0x07, 0x00},   // U+007D (})
+ { 0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+007E (~)
+ { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}    // U+007F (DEL)
+};
+
+// ---------- Novo I2C (Display) ----------
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;
 static i2c_master_dev_handle_t ssd1306_dev = NULL;
 
-static esp_err_t i2c_display_init(void)
-{
+static esp_err_t i2c_display_init(void) {
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
     bus_cfg.i2c_port = I2C_DISPLAY_PORT;
@@ -118,17 +221,22 @@ static esp_err_t i2c_display_init(void)
     dev_cfg.scl_speed_hz = 400000;
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c_bus_handle, &dev_cfg, &ssd1306_dev),
                         TAG, "add device failed");
+
+    esp_err_t probe_ret = i2c_master_probe(i2c_bus_handle, SSD1306_ADDR, 1000);
+    if (probe_ret != ESP_OK) {
+        ESP_LOGE(TAG, "SSD1306 nao encontrado no endereco 0x%02X. Verifique a conexao!", SSD1306_ADDR);
+        return probe_ret;
+    }
+    ESP_LOGI(TAG, "SSD1306 encontrado com sucesso.");
     return ESP_OK;
 }
 
-static esp_err_t ssd1306_write_cmd(uint8_t cmd)
-{
+static esp_err_t ssd1306_write_cmd(uint8_t cmd) {
     uint8_t buf[2] = {0x00, cmd};
     return i2c_master_transmit(ssd1306_dev, buf, sizeof(buf), -1);
 }
 
-static esp_err_t ssd1306_write_data(const uint8_t *data, size_t len)
-{
+static esp_err_t ssd1306_write_data(const uint8_t *data, size_t len) {
     uint8_t *buf = (uint8_t*)malloc(len + 1);
     if (!buf) return ESP_ERR_NO_MEM;
     buf[0] = 0x40;
@@ -139,34 +247,16 @@ static esp_err_t ssd1306_write_data(const uint8_t *data, size_t len)
 }
 
 void ssd1306_init(void) {
-    ssd1306_write_cmd(0xAE); // display off
-    ssd1306_write_cmd(0xD5); // set display clock divide ratio
-    ssd1306_write_cmd(0x80);
-    ssd1306_write_cmd(0xA8); // set multiplex ratio
-    ssd1306_write_cmd(0x3F);
-    ssd1306_write_cmd(0xD3); // set display offset
-    ssd1306_write_cmd(0x00);
-    ssd1306_write_cmd(0x40); // set start line
-    ssd1306_write_cmd(0x8D); // charge pump
-    ssd1306_write_cmd(0x14);
-    ssd1306_write_cmd(0x20); // memory mode
-    ssd1306_write_cmd(0x00);
-    ssd1306_write_cmd(0xA1); // segment remap
-    ssd1306_write_cmd(0xC8); // com scan direction
-    ssd1306_write_cmd(0xDA); // set com pins
-    ssd1306_write_cmd(0x12);
-    ssd1306_write_cmd(0x81); // set contrast
-    ssd1306_write_cmd(0xCF);
-    ssd1306_write_cmd(0xD9); // set pre-charge period
-    ssd1306_write_cmd(0xF1);
-    ssd1306_write_cmd(0xDB); // set vcomh deselect level
-    ssd1306_write_cmd(0x40);
-    ssd1306_write_cmd(0xA4); // output ram to display
-    ssd1306_write_cmd(0xA6); // normal display
-    ssd1306_write_cmd(0x2E); // deactivate scrolling
-    ssd1306_write_cmd(0xAF); // display on
+    ssd1306_write_cmd(0xAE); ssd1306_write_cmd(0xD5); ssd1306_write_cmd(0x80);
+    ssd1306_write_cmd(0xA8); ssd1306_write_cmd(0x3F); ssd1306_write_cmd(0xD3);
+    ssd1306_write_cmd(0x00); ssd1306_write_cmd(0x40); ssd1306_write_cmd(0x8D);
+    ssd1306_write_cmd(0x14); ssd1306_write_cmd(0x20); ssd1306_write_cmd(0x00);
+    ssd1306_write_cmd(0xA1); ssd1306_write_cmd(0xC8); ssd1306_write_cmd(0xDA);
+    ssd1306_write_cmd(0x12); ssd1306_write_cmd(0x81); ssd1306_write_cmd(0xCF);
+    ssd1306_write_cmd(0xD9); ssd1306_write_cmd(0xF1); ssd1306_write_cmd(0xDB);
+    ssd1306_write_cmd(0x40); ssd1306_write_cmd(0xA4); ssd1306_write_cmd(0xA6);
+    ssd1306_write_cmd(0x2E); ssd1306_write_cmd(0xAF);
 
-    // Limpa o display
     for (int page = 0; page < 8; page++) {
         ssd1306_write_cmd(0xB0 + page);
         ssd1306_write_cmd(0x00);
@@ -249,16 +339,35 @@ static void save_detection_to_sd(const uint8_t *jpg, size_t jpg_len, float score
     static int counter = 0;
     char fname[64];
     snprintf(fname, sizeof(fname), "/sdcard/detect_%04d.jpg", counter++);
+
     FILE *f = fopen(fname, "wb");
-    if (f) {
-        fwrite(jpg, 1, jpg_len, f);
-        fclose(f);
-        ESP_LOGI(TAG, "Saved %s (score=%.2f)", fname, score);
+    if (!f) {
+        ESP_LOGE(TAG, "Falha ao abrir %s. SD Card removido?", fname);
+        sd_mounted = false;
+        xSemaphoreGive(sd_mutex);
+        return;
     }
+
+    size_t written = fwrite(jpg, 1, jpg_len, f);
+    fclose(f);
+
+    if (written != jpg_len) {
+        ESP_LOGE(TAG, "Falha ao gravar imagem. SD Card removido?");
+        sd_mounted = false;
+        xSemaphoreGive(sd_mutex);
+        return;
+    }
+    ESP_LOGI(TAG, "Saved %s (score=%.2f)", fname, score);
+
     FILE *log = fopen("/sdcard/detections.csv", "a");
     if (log) {
-        fprintf(log, "%s,%.2f,%d,%d,%d,%d\n", fname, score, bx, by, bw, bh);
+        if (fprintf(log, "%s,%.2f,%d,%d,%d,%d\n", fname, score, bx, by, bw, bh) < 0) {
+            ESP_LOGE(TAG, "Falha ao gravar log. SD Card removido?");
+            sd_mounted = false;
+        }
         fclose(log);
+    } else {
+        sd_mounted = false;
     }
     xSemaphoreGive(sd_mutex);
 }
@@ -289,13 +398,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
 // Servidor HTTP de configuração
 static esp_err_t config_html_handler(httpd_req_t *req) {
-    const char html[] = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>WiFi KIIRA</title></head>"
-        "<body><h2>Configurar WiFi</h2><form action='/save' method='post'>"
-        "<input name='ssid' placeholder='SSID' required><br>"
-        "<input name='pass' type='password' placeholder='Senha' required><br>"
+    const char html[] = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>KIIRA Config</title></head>"
+        "<body><h2>Configurar KIIRA</h2><form action='/save' method='post'>"
+        "SSID: <input name='ssid' placeholder='SSID' required><br>"
+        "Senha: <input name='pass' type='password' placeholder='Senha' required><br>"
+        "IP Backend: <input name='ip' placeholder='192.168.1.127' value='%s'><br><br>"
         "<button type='submit'>Salvar e Conectar</button></form></body></html>";
+
+    char html_buf[1024];
+    snprintf(html_buf, sizeof(html_buf), html, g_backend_ip);
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, html_buf, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t config_save_handler(httpd_req_t *req) {
@@ -303,24 +416,34 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) return httpd_resp_send_500(req);
     buf[ret] = '\0';
-    char ssid[MAX_SSID_LEN] = {0}, pass[MAX_PASS_LEN] = {0};
+
+    char ssid[MAX_SSID_LEN] = {0}, pass[MAX_PASS_LEN] = {0}, ip[32] = {0};
     char *p = strtok(buf, "&");
     while (p) {
-        if (strncmp(p, "ssid=", 5) == 0) strncpy(ssid, p + 5, MAX_SSID_LEN - 1);
-        if (strncmp(p, "pass=", 5) == 0) strncpy(pass, p + 5, MAX_PASS_LEN - 1);
+        if (strncmp(p, "ssid=", 5) == 0) strlcpy(ssid, p + 5, MAX_SSID_LEN);
+        if (strncmp(p, "pass=", 5) == 0) strlcpy(pass, p + 5, MAX_PASS_LEN);
+        if (strncmp(p, "ip=", 3) == 0) strlcpy(ip, p + 3, sizeof(ip));
         p = strtok(NULL, "&");
     }
     for (int i = 0; ssid[i]; i++) if (ssid[i] == '+') ssid[i] = ' ';
     for (int i = 0; pass[i]; i++) if (pass[i] == '+') pass[i] = ' ';
+    for (int i = 0; ip[i]; i++) if (ip[i] == '+') ip[i] = ' ';
+
     if (strlen(ssid) == 0 || strlen(pass) == 0) {
         httpd_resp_set_status(req, "400");
         httpd_resp_sendstr(req, "Preencha SSID e senha.");
         return ESP_OK;
     }
+
+    if (strlen(ip) > 0) {
+        strlcpy(g_backend_ip, ip, sizeof(g_backend_ip));
+    }
+
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_set_str(nvs, NVS_KEY_SSID, ssid);
         nvs_set_str(nvs, NVS_KEY_PASS, pass);
+        nvs_set_str(nvs, NVS_KEY_BACKEND_IP, g_backend_ip);
         nvs_commit(nvs);
         nvs_close(nvs);
     }
@@ -369,25 +492,39 @@ static esp_err_t upload_image(const uint8_t *jpg, size_t len, float score,
     if (!body) return ESP_ERR_NO_MEM;
 
     char url[256];
-    snprintf(url, sizeof(url), "%s%s", BACKEND_URL, UPLOAD_ENDPOINT);
-    esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.method = HTTP_METHOD_POST;
-    cfg.timeout_ms = 5000;
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    esp_http_client_set_header(client, "Content-Type", "multipart/form-data; boundary=----KiiraBoundary");
-    esp_http_client_set_post_field(client, body, body_len);
-    esp_err_t ret = esp_http_client_perform(client);
-    if (ret == ESP_OK) ESP_LOGI(TAG, "Upload HTTP %d", esp_http_client_get_status_code(client));
-    else ESP_LOGE(TAG, "Upload failed: %s", esp_err_to_name(ret));
-    esp_http_client_cleanup(client);
+    snprintf(url, sizeof(url), "http://%s:%d%s", g_backend_ip, BACKEND_PORT, UPLOAD_ENDPOINT);
+
+    esp_err_t ret = ESP_FAIL;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        esp_http_client_config_t cfg = {};
+        cfg.url = url;
+        cfg.method = HTTP_METHOD_POST;
+        cfg.timeout_ms = 5000;
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        esp_http_client_set_header(client, "Content-Type", "multipart/form-data; boundary=----KiiraBoundary");
+        esp_http_client_set_post_field(client, body, body_len);
+
+        ret = esp_http_client_perform(client);
+        if (ret == ESP_OK) {
+            int status = esp_http_client_get_status_code(client);
+            if (status >= 200 && status < 300) {
+                ESP_LOGI(TAG, "Upload HTTP %d", status);
+                esp_http_client_cleanup(client);
+                free(body);
+                return ESP_OK;
+            }
+        }
+        ESP_LOGW(TAG, "Upload tentativa %d falhou: %s", attempt + 1, esp_err_to_name(ret));
+        esp_http_client_cleanup(client);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
     free(body);
     return ret;
 }
 
 static void fetch_config(void) {
     char url[256];
-    snprintf(url, sizeof(url), "%s%s?device_id=%s", BACKEND_URL, CONFIG_ENDPOINT, device_id_str);
+    snprintf(url, sizeof(url), "http://%s:%d%s?device_id=%s", g_backend_ip, BACKEND_PORT, CONFIG_ENDPOINT, device_id_str);
     esp_http_client_config_t cfg = {};
     cfg.url = url;
     cfg.method = HTTP_METHOD_GET;
@@ -417,7 +554,7 @@ static void fetch_config(void) {
     esp_http_client_cleanup(client);
 }
 
-// Câmera
+// Câmera (Otimizada para OV5640 + ESP-DL)
 static esp_err_t camera_init(void) {
     camera_config_t cfg = {};
     cfg.pin_pwdn = -1;
@@ -430,17 +567,50 @@ static esp_err_t camera_init(void) {
     cfg.pin_vsync = 6;
     cfg.pin_href = 7;
     cfg.pin_pclk = 13;
-    cfg.xclk_freq_hz = 20000000;
+
+    // OV5640 PRECISA de 20MHz para gerar RGB565 válido para a IA
+    cfg.xclk_freq_hz = 20000000; 
+
     cfg.ledc_timer = LEDC_TIMER_0;
     cfg.ledc_channel = LEDC_CHANNEL_0;
     cfg.pixel_format = PIXFORMAT_RGB565;
     cfg.frame_size = FRAMESIZE_VGA;
     cfg.jpeg_quality = 12;
-    cfg.fb_count = 2;
+
+    // 3 buffers evitam o "Tearing" (glitch horizontal) pois o DMA tem mais folga
+    cfg.fb_count = 3; 
     cfg.fb_location = CAMERA_FB_IN_PSRAM;
-    cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
-    cfg.sccb_i2c_port = 0;
-    return esp_camera_init(&cfg);
+
+    // WHEN_EMPTY garante que a IA leia um buffer que NÃO está sendo gravado pelo DMA
+    cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY; 
+    cfg.sccb_i2c_port = 1; 
+
+    esp_err_t err = esp_camera_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
+        return err;
+    }
+
+    // Patch específico para o OV5640 corrigir cores psicodélicas e estabilizar ISP
+    sensor_t * s = esp_camera_sensor_get();
+    if (s) {
+        s->set_brightness(s, 0);
+        s->set_contrast(s, 0);
+        s->set_saturation(s, 0);
+        s->set_wb_mode(s, 0); // Auto White Balance
+        s->set_aec2(s, 1);
+        s->set_ae_level(s, 0);
+    }
+
+    // Descartar frames iniciais para o AWB/AEC estabilizar
+    ESP_LOGI(TAG, "Aguardando estabilizacao do sensor OV5640...");
+    for (int i = 0; i < 5; i++) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (fb) esp_camera_fb_return(fb);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    return ESP_OK;
 }
 
 static void update_display(void) {
@@ -458,6 +628,12 @@ static void update_display(void) {
         if (g_detected) snprintf(buf, sizeof(buf), "Det:%.2f", g_last_score);
         else snprintf(buf, sizeof(buf), "Det:none");
         ssd1306_draw_string(4, 0, buf);
+    }
+
+    if (backend_offline) {
+        ssd1306_draw_string(6, 0, "BACKEND OFFLINE");
+    } else {
+        ssd1306_draw_string(6, 0, "Backend: OK    ");
     }
 }
 
@@ -509,10 +685,10 @@ static void wifi_manager(void) {
     }
 
     if (has && strlen(saved_ssid) > 0) {
-        strncpy(g_ssid, saved_ssid, sizeof(g_ssid) - 1);
+        strlcpy(g_ssid, saved_ssid, sizeof(g_ssid));
         wifi_config_t wcfg = {};
-        strncpy((char*)wcfg.sta.ssid, saved_ssid, sizeof(wcfg.sta.ssid));
-        strncpy((char*)wcfg.sta.password, saved_pass, sizeof(wcfg.sta.password));
+        strlcpy((char*)wcfg.sta.ssid, saved_ssid, sizeof(wcfg.sta.ssid));
+        strlcpy((char*)wcfg.sta.password, saved_pass, sizeof(wcfg.sta.password));
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_set_config(WIFI_IF_STA, &wcfg);
         esp_wifi_start();
@@ -526,9 +702,8 @@ static void wifi_manager(void) {
         esp_wifi_stop();
     }
 
-    // Modo AP
     wifi_config_t apcfg = {};
-    strncpy((char*)apcfg.ap.ssid, WIFI_AP_SSID, sizeof(apcfg.ap.ssid));
+    strlcpy((char*)apcfg.ap.ssid, WIFI_AP_SSID, sizeof(apcfg.ap.ssid));
     apcfg.ap.ssid_len = strlen(WIFI_AP_SSID);
     apcfg.ap.channel = 1;
     apcfg.ap.authmode = WIFI_AUTH_OPEN;
@@ -565,6 +740,16 @@ static void wifi_manager(void) {
 
 extern "C" void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
+
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        size_t len = sizeof(g_backend_ip);
+        if (nvs_get_str(nvs, NVS_KEY_BACKEND_IP, g_backend_ip, &len) != ESP_OK) {
+            strcpy(g_backend_ip, "192.168.1.127");
+        }
+        nvs_close(nvs);
+    }
+
     i2c_display_init();
     ssd1306_init();
     ssd1306_draw_string(0, 0, "Iniciando...");
@@ -574,7 +759,6 @@ extern "C" void app_main(void) {
     sd_card_init();
     camera_init();
 
-    // Buzzer PWM
     ledc_timer_config_t timer = {};
     timer.speed_mode = LEDC_LOW_SPEED_MODE;
     timer.duty_resolution = BUZZER_RESOLUTION;
@@ -611,7 +795,8 @@ extern "C" void app_main(void) {
             .data     = fb->buf,
             .width    = (uint16_t)fb->width,
             .height   = (uint16_t)fb->height,
-            .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
+            // OV5640 usa Big Endian. Se as cores no backend ficarem trocadas, mude para DL_IMAGE_PIX_TYPE_RGB565LE
+            .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565BE, 
         };
 
         auto &res = s_detect->run(img);
@@ -630,9 +815,21 @@ extern "C" void app_main(void) {
             size_t jpg_len = 0;
             if (fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
                         PIXFORMAT_RGB565, 75, &jpg, &jpg_len)) {
-                upload_image(jpg, jpg_len, res.front().score,
+
+                esp_err_t up_ret = upload_image(jpg, jpg_len, res.front().score,
                              res.front().box[0], res.front().box[1],
                              res.front().box[2], res.front().box[3]);
+
+                if (up_ret == ESP_OK) {
+                    backend_fail_count = 0;
+                    backend_offline = false;
+                } else {
+                    backend_fail_count++;
+                    if (backend_fail_count >= 10) {
+                        backend_offline = true;
+                    }
+                }
+
                 save_detection_to_sd(jpg, jpg_len, res.front().score,
                                      res.front().box[0], res.front().box[1],
                                      res.front().box[2], res.front().box[3]);
