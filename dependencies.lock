@@ -1,4 +1,14 @@
 dependencies:
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/dl_fft:
     component_hash: ced3cf28cc70452b7859c06f4e5059215167254a2047e34c893d6f501ccd6ea2
     dependencies:
@@ -232,10 +242,11 @@ dependencies:
       type: local
     version: '*'
 direct_dependencies:
+- espressif/cjson
 - espressif/esp-dl
 - espressif/esp32-camera
 - espressif/pedestrian_detect
 - protocol_examples_common
-manifest_hash: 04ebddb9857579e537ee9469f791ab58e77e92c1dfd01e4e7dfe62f08d6033f3
+manifest_hash: 05986652d3f66cbff9c3b523812d9dc5685c4fd64113f67c48a9a2eb5aed6ba7
 target: esp32s3
 version: 3.0.0
