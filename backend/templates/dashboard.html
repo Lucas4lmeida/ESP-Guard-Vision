@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ESP GUARD VISION — CENTRAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070b0c; --panel:#0e1517; --panel2:#101a1d; --line:#1d2c30;
+    --ink:#cfe9e4; --dim:#6f8a87; --faint:#496360;
+    --armed:#36e08a; --warn:#f5b13d; --intru:#ff2b3d; --cyan:#36cfe0;
+    --glow:0 0 18px rgba(54,224,138,.25);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"JetBrains Mono",monospace; font-size:13px; line-height:1.45;
+    background-image:
+      linear-gradient(rgba(54,224,138,.04) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(54,224,138,.04) 1px,transparent 1px),
+      radial-gradient(circle at 80% -10%,rgba(54,207,224,.06),transparent 45%);
+    background-size:34px 34px,34px 34px,100% 100%;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* scanlines */
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px);
+    mix-blend-mode:multiply;opacity:.5}
+  h1,h2,h3{font-family:"Oxanium",sans-serif;margin:0;letter-spacing:.04em}
+  a{color:var(--cyan)}
+  .wrap{max-width:1320px;margin:0 auto;padding:18px 20px 60px}
+
+  /* header */
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    border-bottom:1px solid var(--line);padding-bottom:14px}
+  .brand{font-family:"Oxanium";font-weight:800;font-size:22px;letter-spacing:.12em}
+  .brand b{color:var(--armed);text-shadow:var(--glow)}
+  .spacer{flex:1}
+  .pill{border:1px solid var(--line);background:var(--panel);padding:6px 10px;
+    border-radius:3px;color:var(--dim);font-size:11px;letter-spacing:.08em;
+    display:inline-flex;align-items:center;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);box-shadow:0 0 8px currentColor}
+  .dot.live{background:var(--armed);color:var(--armed)}
+  .dot.dead{background:var(--intru);color:var(--intru)}
+  .btn{font-family:"JetBrains Mono";cursor:pointer;border:1px solid var(--line);
+    background:var(--panel2);color:var(--ink);padding:6px 12px;border-radius:3px;
+    letter-spacing:.06em;font-size:11px;transition:.15s}
+  .btn:hover{border-color:var(--armed);color:var(--armed)}
+  .btn.warn:hover{border-color:var(--warn);color:var(--warn)}
+  .btn.danger{border-color:#3a1417;color:#ff8f99}
+  .btn.danger:hover{background:var(--intru);color:#fff;border-color:var(--intru)}
+
+  /* status strip */
+  .strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:16px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px 14px}
+  .stat .k{color:var(--faint);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
+  .stat .v{font-family:"Oxanium";font-weight:800;font-size:28px;margin-top:4px}
+  .stat.alert .v{color:var(--intru)}
+  .stat.ok .v{color:var(--armed)}
+
+  /* intrusion banner */
+  #alert{display:none;margin:6px 0 18px;border:1px solid var(--intru);border-radius:4px;
+    background:linear-gradient(90deg,rgba(255,43,61,.16),rgba(255,43,61,.04));
+    padding:14px 16px;align-items:center;gap:16px}
+  #alert.on{display:flex;animation:throb 1s steps(2,end) infinite}
+  @keyframes throb{0%{box-shadow:0 0 0 rgba(255,43,61,0)}50%{box-shadow:0 0 26px rgba(255,43,61,.55)}100%{box-shadow:0 0 0 rgba(255,43,61,0)}}
+  #alert .ico{font-family:"Oxanium";font-weight:800;font-size:30px;color:var(--intru);
+    letter-spacing:.1em;text-shadow:0 0 16px rgba(255,43,61,.7)}
+  #alert .msg{flex:1}
+  #alert .msg b{color:#ff8f99}
+  #alert .thumbs{display:flex;gap:8px}
+  #alert img{width:64px;height:48px;object-fit:cover;border:1px solid var(--intru);border-radius:2px}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,1fr)}}
+  section.card{background:var(--panel);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+  .card h2{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+    padding:11px 14px;border-bottom:1px solid var(--line);background:var(--panel2);
+    display:flex;align-items:center;gap:10px}
+  .card h2 .tag{margin-left:auto;color:var(--faint);font-size:10px}
+  .card .body{padding:14px}
+
+  /* devices */
+  .dev{border:1px solid var(--line);border-radius:4px;padding:12px;margin-bottom:12px;background:var(--panel2)}
+  .dev:last-child{margin-bottom:0}
+  .dev .top{display:flex;align-items:center;gap:10px}
+  .dev .name{font-family:"Oxanium";font-weight:600;font-size:15px}
+  .dev .id{color:var(--faint);font-size:10px}
+  .badge{font-size:10px;padding:2px 7px;border-radius:3px;letter-spacing:.08em;border:1px solid}
+  .badge.armed{color:var(--armed);border-color:#15402c;background:rgba(54,224,138,.08)}
+  .badge.dis{color:var(--warn);border-color:#3d2f12;background:rgba(245,177,61,.08)}
+  .dev .meta{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;margin:10px 0;color:var(--dim);font-size:11px}
+  .dev .meta b{color:var(--ink);font-weight:400}
+  .dev .ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:10px}
+  .dev .ctrl label{color:var(--faint);font-size:10px;letter-spacing:.1em}
+  input[type=number]{width:64px;background:#0a1113;border:1px solid var(--line);color:var(--ink);
+    font-family:"JetBrains Mono";padding:4px 6px;border-radius:3px}
+  .dev .lastimg{width:72px;height:54px;object-fit:cover;border:1px solid var(--line);border-radius:3px;cursor:pointer}
+
+  /* gallery */
+  .gal{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  @media(max-width:600px){.gal{grid-template-columns:repeat(3,1fr)}}
+  .shot{position:relative;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:#0a1113}
+  .shot.unack{border-color:var(--intru);box-shadow:0 0 0 1px rgba(255,43,61,.4)}
+  .shot img{width:100%;height:78px;object-fit:cover;display:block;cursor:pointer}
+  .shot .cap{font-size:9.5px;color:var(--dim);padding:3px 5px;display:flex;justify-content:space-between}
+  .shot .cap .sc{color:var(--warn)}
+  .shot .x{position:absolute;top:3px;right:3px;font-size:9px;padding:1px 5px;cursor:pointer;
+    background:rgba(0,0,0,.6);border:1px solid var(--intru);color:#ff8f99;border-radius:2px}
+
+  /* logs */
+  .logs{max-height:520px;overflow:auto}
+  .logf{display:flex;gap:6px;margin-bottom:10px}
+  .logf .btn.active{border-color:var(--cyan);color:var(--cyan)}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  td{padding:4px 6px;border-bottom:1px solid rgba(29,44,48,.5);vertical-align:top}
+  td.t{color:var(--faint);white-space:nowrap;width:62px}
+  .lv{font-weight:600;letter-spacing:.06em}
+  .lv.INFO{color:var(--cyan)} .lv.WARN{color:var(--warn)} .lv.ALERT{color:var(--intru)}
+  .ev{color:var(--dim)}
+
+  /* modal */
+  #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:20;
+    align-items:center;justify-content:center;padding:24px}
+  #modal.on{display:flex}
+  #modal img{max-width:90vw;max-height:84vh;border:1px solid var(--line);box-shadow:0 0 40px rgba(0,0,0,.8)}
+  .muted{color:var(--faint);text-align:center;padding:18px;font-size:11px}
+  .blink{animation:bl 1.2s steps(2) infinite}@keyframes bl{50%{opacity:.25}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">ESP <b>GUARD</b> VISION</div>
+    <span class="pill"><span id="conn" class="dot"></span><span id="connTxt">conectando…</span></span>
+    <div class="spacer"></div>
+    <span class="pill" id="clock">--:--:--</span>
+    <button class="btn warn" id="soundBtn">🔇 SOM: OFF</button>
+  </header>
+
+  <div class="strip">
+    <div class="stat ok"><div class="k">Dispositivos online</div><div class="v"><span id="sOnline">0</span><span style="color:var(--faint);font-size:16px">/<span id="sTotal">0</span></span></div></div>
+    <div class="stat ok"><div class="k">Armados</div><div class="v" id="sArmed">0</div></div>
+    <div class="stat alert"><div class="k">Alertas pendentes</div><div class="v" id="sUnack">0</div></div>
+    <div class="stat"><div class="k">Intrusões 24h</div><div class="v" id="s24">0</div></div>
+    <div class="stat"><div class="k">Total registrado</div><div class="v" id="sTot">0</div></div>
+  </div>
+
+  <div id="alert">
+    <div class="ico blink">⚠ INTRUSÃO</div>
+    <div class="msg" id="alertMsg"></div>
+    <div class="thumbs" id="alertThumbs"></div>
+    <button class="btn danger" id="ackAllBtn">RECONHECER TUDO</button>
+  </div>
+
+  <div class="grid">
+    <div>
+      <section class="card">
+        <h2>Dispositivos <span class="tag" id="devTag"></span></h2>
+        <div class="body" id="devices"><div class="muted">sem dispositivos ainda — ligue uma KIIRA</div></div>
+      </section>
+
+      <section class="card" style="margin-top:18px">
+        <h2>Evidências recentes <span class="tag">clique p/ ampliar</span></h2>
+        <div class="body"><div class="gal" id="gallery"></div></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Registro de eventos <span class="tag" id="logTag"></span></h2>
+      <div class="body">
+        <div class="logf">
+          <button class="btn active" data-lv="">TODOS</button>
+          <button class="btn" data-lv="ALERT">ALERTA</button>
+          <button class="btn" data-lv="WARN">WARN</button>
+          <button class="btn" data-lv="INFO">INFO</button>
+        </div>
+        <div class="logs"><table id="logTable"></table></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div id="modal"><img id="modalImg" src="" alt=""></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (u, opt) => { const r = await fetch(u, opt); if(!r.ok) throw new Error(r.status); return r.json(); };
+const OP = "operador-web";
+let logLevel = "";
+let soundOn = false, audioCtx=null, sirenTimer=null, sirenOsc=null, sirenGain=null;
+
+/* ---------- relógio ---------- */
+setInterval(()=>{ $("#clock").textContent = new Date().toLocaleTimeString("pt-BR"); }, 1000);
+
+/* ---------- sirene (Web Audio) ---------- */
+function ensureAudio(){
+  if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  if(audioCtx.state==="suspended") audioCtx.resume();
+}
+function startSiren(){
+  if(!soundOn || sirenOsc) return;
+  ensureAudio();
+  sirenOsc = audioCtx.createOscillator();
+  sirenGain = audioCtx.createGain();
+  sirenOsc.type="sawtooth";
+  sirenGain.gain.value=0.05;
+  sirenOsc.connect(sirenGain).connect(audioCtx.destination);
+  sirenOsc.start();
+  let hi=false;
+  const sweep=()=>{ if(!sirenOsc)return; const t=audioCtx.currentTime;
+    sirenOsc.frequency.cancelScheduledValues(t);
+    sirenOsc.frequency.setValueAtTime(hi?920:560,t);
+    sirenOsc.frequency.linearRampToValueAtTime(hi?560:920,t+0.5); hi=!hi; };
+  sweep(); sirenTimer=setInterval(sweep,500);
+}
+function stopSiren(){
+  if(sirenTimer){clearInterval(sirenTimer);sirenTimer=null;}
+  if(sirenOsc){try{sirenOsc.stop();}catch(e){} sirenOsc.disconnect(); sirenOsc=null;}
+  if(sirenGain){sirenGain.disconnect();sirenGain=null;}
+}
+$("#soundBtn").onclick = ()=>{
+  soundOn=!soundOn;
+  $("#soundBtn").textContent = soundOn ? "🔊 SOM: ON" : "🔇 SOM: OFF";
+  $("#soundBtn").classList.toggle("warn", !soundOn);
+  if(soundOn){ ensureAudio(); } else { stopSiren(); }
+};
+
+/* ---------- ações ---------- */
+async function setConfig(id, patch){
+  try{ await api(`/api/devices/${id}/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)}); poll(); }
+  catch(e){ alert("Falha ao salvar config: "+e.message); }
+}
+async function ackAll(id){ await api(`/api/devices/${id}/ack_all`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:OP})}); poll(); }
+async function ackOne(id){ await api(`/api/detections/${id}/ack`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:OP})}); poll(); }
+$("#ackAllBtn").onclick = async ()=>{ try{ const a=await api("/api/alerts"); for(const g of a.groups){ await ackAll(g.device_id); } }catch(e){} };
+
+/* modal */
+function openImg(u){ $("#modalImg").src=u; $("#modal").classList.add("on"); }
+$("#modal").onclick = ()=> $("#modal").classList.remove("on");
+
+/* filtros de log */
+document.querySelectorAll(".logf .btn").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".logf .btn").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active"); logLevel=b.dataset.lv; renderLogs();
+});
+
+/* ---------- util ---------- */
+const ago = iso => {
+  const s = Math.max(0,(Date.now()-new Date(iso).getTime())/1000);
+  if(s<60) return Math.floor(s)+"s"; if(s<3600) return Math.floor(s/60)+"m";
+  if(s<86400) return Math.floor(s/3600)+"h"; return Math.floor(s/86400)+"d";
+};
+const hhmm = iso => new Date(iso).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+
+/* ---------- render ---------- */
+function renderStatus(s){
+  $("#sOnline").textContent=s.devices_online; $("#sTotal").textContent=s.devices_total;
+  $("#sArmed").textContent=s.devices_armed; $("#sUnack").textContent=s.unacknowledged;
+  $("#s24").textContent=s.detections_24h; $("#sTot").textContent=s.detections_total;
+}
+function renderDevices(list){
+  $("#devTag").textContent = list.length+" un.";
+  if(!list.length){ $("#devices").innerHTML='<div class="muted">sem dispositivos ainda — ligue uma KIIRA</div>'; return; }
+  $("#devices").innerHTML = list.map(d=>`
+    <div class="dev">
+      <div class="top">
+        <span class="dot ${d.online?'live':'dead'}"></span>
+        <span class="name">${esc(d.name)}</span>
+        <span class="id">${esc(d.device_id)}</span>
+        <span style="flex:1"></span>
+        <span class="badge ${d.armed?'armed':'dis'}">${d.armed?'ARMADO':'DESARMADO'}</span>
+      </div>
+      <div class="meta">
+        <div>Estado: <b>${d.online?'ONLINE':'OFFLINE'}</b></div>
+        <div>Visto: <b>${d.last_seen?ago(d.last_seen)+' atrás':'—'}</b></div>
+        <div>IP: <b>${esc(d.last_ip||'—')}</b></div>
+        <div>Firmware: <b>${esc(d.firmware||'—')}</b></div>
+        <div>Detecções: <b>${d.detections}</b></div>
+        <div>Pendentes: <b style="color:${d.unacknowledged?'var(--intru)':'var(--ink)'}">${d.unacknowledged}</b></div>
+      </div>
+      <div class="ctrl">
+        <button class="btn ${d.armed?'warn':''}" onclick="setConfig('${d.device_id}',{detect:${!d.armed}})">${d.armed?'DESARMAR':'ARMAR'}</button>
+        <label>min_score</label>
+        <input type="number" min="0" max="1" step="0.05" value="${d.min_score.toFixed(2)}" id="ms_${cssId(d.device_id)}">
+        <button class="btn" onclick="setConfig('${d.device_id}',{min_score:parseFloat(document.getElementById('ms_${cssId(d.device_id)}').value)})">SALVAR</button>
+        ${d.unacknowledged?`<button class="btn danger" onclick="ackAll('${d.device_id}')">RECONHECER (${d.unacknowledged})</button>`:''}
+        <span style="flex:1"></span>
+        ${d.last_detection?`<img class="lastimg" src="${d.last_detection.url}" onclick="openImg('${d.last_detection.url}')">`:''}
+      </div>
+    </div>`).join("");
+}
+function renderGallery(list){
+  if(!list.length){ $("#gallery").innerHTML='<div class="muted">nenhuma evidência</div>'; return; }
+  $("#gallery").innerHTML = list.map(d=>`
+    <div class="shot ${d.acknowledged?'':'unack'}">
+      ${d.acknowledged?'':`<span class="x" onclick="ackOne(${d.id})">OK</span>`}
+      <img src="${d.url}" onclick="openImg('${d.url}')">
+      <div class="cap"><span>${esc(d.device_id)}</span><span class="sc">${(d.score*100).toFixed(0)}%</span></div>
+      <div class="cap"><span>${hhmm(d.timestamp)}</span><span>${ago(d.timestamp)}</span></div>
+    </div>`).join("");
+}
+let logCache=[];
+function renderLogs(){
+  const rows = logLevel ? logCache.filter(l=>l.level===logLevel) : logCache;
+  $("#logTag").textContent = rows.length+" linhas";
+  if(!rows.length){ $("#logTable").innerHTML='<tr><td class="muted">sem eventos</td></tr>'; return; }
+  $("#logTable").innerHTML = rows.map(l=>`
+    <tr>
+      <td class="t">${hhmm(l.timestamp)}</td>
+      <td><span class="lv ${l.level}">${l.level}</span></td>
+      <td><span class="ev">${esc(l.event)}</span> ${esc(l.message)} ${l.device_id?`<span class="id" style="color:var(--faint)">@${esc(l.device_id)}</span>`:''}</td>
+    </tr>`).join("");
+}
+function renderAlert(a){
+  const box=$("#alert");
+  if(a.total>0){
+    box.classList.add("on");
+    const names=a.groups.map(g=>`<b>${esc(g.device_id)}</b> (${g.count})`).join(" · ");
+    $("#alertMsg").innerHTML = `Presença confirmada em ${names}. Última: ${hhmm(a.groups[0].latest_ts)} — score ${(a.groups[0].latest_score*100).toFixed(0)}%.`;
+    $("#alertThumbs").innerHTML = a.groups.slice(0,4).map(g=>`<img src="${g.url}" onclick="openImg('${g.url}')">`).join("");
+    startSiren();
+  } else {
+    box.classList.remove("on"); stopSiren();
+  }
+}
+const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cssId = s => String(s).replace(/[^a-zA-Z0-9_]/g,"_");
+
+/* ---------- loop ---------- */
+function setConn(ok){
+  $("#conn").className = "dot "+(ok?"live":"dead");
+  $("#connTxt").textContent = ok ? "central online" : "sem backend";
+}
+async function poll(){
+  try{
+    const [st,devs,det,logs,al] = await Promise.all([
+      api("/api/status"), api("/api/devices"), api("/api/detections?limit=24"),
+      api("/api/logs?limit=120"), api("/api/alerts"),
+    ]);
+    setConn(true);
+    renderStatus(st); renderDevices(devs); renderGallery(det);
+    logCache=logs; renderLogs(); renderAlert(al);
+  }catch(e){ setConn(false); }
+}
+window.setConfig=setConfig; window.ackAll=ackAll; window.ackOne=ackOne; window.openImg=openImg;
+poll(); setInterval(poll,3000);
+</script>
+</body>
+</html>

@@ -598,7 +598,7 @@ static esp_err_t camera_init(void) {
     cfg.ledc_timer = LEDC_TIMER_0;
     cfg.ledc_channel = LEDC_CHANNEL_0;
     cfg.pixel_format = PIXFORMAT_RGB565;
-    cfg.frame_size = FRAMESIZE_VGA;
+    cfg.frame_size = FRAMESIZE_XGA;
     cfg.jpeg_quality = 16;
 
     // 3 buffers evitam o "Tearing" (glitch horizontal) pois o DMA tem mais folga
@@ -647,7 +647,7 @@ static void update_display(void) {
         ssd1306_draw_string(0, 0, "STA:");
         ssd1306_draw_string(0, 30, g_ssid);
         ssd1306_draw_string(2, 0, "IP:");
-        ssd1306_draw_string(2, 30, g_ip);
+        ssd1306_draw_string(2, 20, g_ip);
         char buf[24];
         if (g_detected) snprintf(buf, sizeof(buf), "%s %.2f", g_state_str, g_last_score);
         else            snprintf(buf, sizeof(buf), "%s", g_state_str);
