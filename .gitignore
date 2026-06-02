@@ -79,3 +79,7 @@ Desktop.ini
 
 # Imagens
 *.jpg
+
+# Banco de dados
+*.db
+*.sqlite

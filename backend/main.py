@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ---------- Configuração ----------
 DATABASE_URL = "sqlite:///./guard.db"
@@ -26,7 +26,7 @@ class Detection(Base):
     __tablename__ = "detections"
     id = Column(Integer, primary_key=True, index=True)
     device_id = Column(String(50), index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     filename = Column(String(200))
     score = Column(Float, default=0.0)
     box_x = Column(Integer, nullable=True)
@@ -52,8 +52,7 @@ class DetectionOut(BaseModel):
     score: float
     box: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeviceStatus(BaseModel):
     device_id: str
@@ -61,6 +60,10 @@ class DeviceStatus(BaseModel):
     last_score: Optional[float]
 
 # ---------- Rotas ----------
+JPEG_MAGIC = b"\xff\xd8\xff"
+MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
+
+
 @app.post("/upload", response_model=DetectionOut)
 async def upload_image(
     file: UploadFile = File(...),
@@ -71,37 +74,62 @@ async def upload_image(
     box_w: int = Form(None),
     box_h: int = Form(None),
 ):
-    """Recebe uma imagem JPEG do ESP32, salva em disco e registra no banco."""
+    """Recebe uma imagem JPEG do ESP32, valida, salva em disco e registra."""
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Tipo de arquivo inválido")
+        raise HTTPException(status_code=415, detail="Tipo de arquivo inválido")
+
+    # Lê o conteúdo uma única vez e valida ANTES de gravar.
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Imagem vazia")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Imagem maior que o limite")
+    # Rejeita bytes corrompidos/truncados que não são JPEG — isso evita gravar
+    # arquivos que aparecem "quebrados" no dashboard.
+    if not data.startswith(JPEG_MAGIC):
+        raise HTTPException(status_code=415, detail="Conteúdo não é um JPEG válido")
 
     # Gera nome único
-    timestamp = datetime.utcnow()
-    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    timestamp = datetime.now(timezone.utc)
+    ext = os.path.splitext(file.filename or "")[1] or ".jpg"
     safe_name = f"{device_id}_{int(time.time()*1000)}{ext}"
     file_path = os.path.join(UPLOAD_DIR, safe_name)
 
-    # Salva arquivo
-    with open(file_path, "wb") as buffer:
-        buffer.write(await file.read())
+    # Salva arquivo (gravação atômica: escreve em .tmp e renomeia)
+    tmp_path = file_path + ".tmp"
+    with open(tmp_path, "wb") as buffer:
+        buffer.write(data)
+    os.replace(tmp_path, file_path)
 
     # Registra no banco
     db = SessionLocal()
-    detection = Detection(
-        device_id=device_id,
-        timestamp=timestamp,
-        filename=safe_name,
-        score=score,
-        box_x=box_x,
-        box_y=box_y,
-        box_w=box_w,
-        box_h=box_h,
-    )
-    db.add(detection)
-    db.commit()
-    db.refresh(detection)
-    db.close()
-    return detection
+    try:
+        detection = Detection(
+            device_id=device_id,
+            timestamp=timestamp,
+            filename=safe_name,
+            score=score,
+            box_x=box_x,
+            box_y=box_y,
+            box_w=box_w,
+            box_h=box_h,
+        )
+        db.add(detection)
+        db.commit()
+        db.refresh(detection)
+        box = None
+        if detection.box_x is not None:
+            box = f"{detection.box_x},{detection.box_y},{detection.box_w},{detection.box_h}"
+        return DetectionOut(
+            id=detection.id,
+            device_id=detection.device_id,
+            timestamp=detection.timestamp,
+            filename=detection.filename,
+            score=detection.score,
+            box=box,
+        )
+    finally:
+        db.close()
 
 @app.get("/images", response_model=List[DetectionOut])
 async def list_images(device_id: Optional[str] = None, limit: int = 50):
