@@ -188,11 +188,7 @@ async def device_status():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """Página HTML para visualizar as últimas detecções."""
-    db = SessionLocal()
-    detections = db.query(Detection).order_by(Detection.timestamp.desc()).limit(20).all()
-    db.close()
-    return templates.TemplateResponse("dashboard.html", {"request": request, "detections": detections})
+    return templates.TemplateResponse(request, "dashboard.html")
 
 @app.get("/config")
 async def get_config(device_id: str):
@@ -205,4 +201,4 @@ async def get_config(device_id: str):
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

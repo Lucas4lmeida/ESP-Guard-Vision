@@ -1,354 +1,903 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ESP GUARD VISION — CENTRAL</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KIIRA — Guard Vision</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-  :root{
-    --bg:#070b0c; --panel:#0e1517; --panel2:#101a1d; --line:#1d2c30;
-    --ink:#cfe9e4; --dim:#6f8a87; --faint:#496360;
-    --armed:#36e08a; --warn:#f5b13d; --intru:#ff2b3d; --cyan:#36cfe0;
-    --glow:0 0 18px rgba(54,224,138,.25);
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0a0a0b;
+    --surface:   #111114;
+    --card:      #17171c;
+    --border:    rgba(255,255,255,0.07);
+    --border-hi: rgba(255,255,255,0.14);
+    --text:      #e8e8ea;
+    --muted:     #6b6b75;
+    --mono:      'Space Mono', monospace;
+    --sans:      'DM Sans', sans-serif;
+    --red:       #f43f5e;
+    --red-dim:   rgba(244,63,94,0.12);
+    --red-glow:  rgba(244,63,94,0.25);
+    --green:     #22d3a5;
+    --amber:     #f59e0b;
+    --accent:    #6366f1;
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{
-    background:var(--bg); color:var(--ink);
-    font-family:"JetBrains Mono",monospace; font-size:13px; line-height:1.45;
-    background-image:
-      linear-gradient(rgba(54,224,138,.04) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(54,224,138,.04) 1px,transparent 1px),
-      radial-gradient(circle at 80% -10%,rgba(54,207,224,.06),transparent 45%);
-    background-size:34px 34px,34px 34px,100% 100%;
-    -webkit-font-smoothing:antialiased;
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
   }
-  /* scanlines */
-  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9;
-    background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px);
-    mix-blend-mode:multiply;opacity:.5}
-  h1,h2,h3{font-family:"Oxanium",sans-serif;margin:0;letter-spacing:.04em}
-  a{color:var(--cyan)}
-  .wrap{max-width:1320px;margin:0 auto;padding:18px 20px 60px}
 
-  /* header */
-  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
-    border-bottom:1px solid var(--line);padding-bottom:14px}
-  .brand{font-family:"Oxanium";font-weight:800;font-size:22px;letter-spacing:.12em}
-  .brand b{color:var(--armed);text-shadow:var(--glow)}
-  .spacer{flex:1}
-  .pill{border:1px solid var(--line);background:var(--panel);padding:6px 10px;
-    border-radius:3px;color:var(--dim);font-size:11px;letter-spacing:.08em;
-    display:inline-flex;align-items:center;gap:8px}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);box-shadow:0 0 8px currentColor}
-  .dot.live{background:var(--armed);color:var(--armed)}
-  .dot.dead{background:var(--intru);color:var(--intru)}
-  .btn{font-family:"JetBrains Mono";cursor:pointer;border:1px solid var(--line);
-    background:var(--panel2);color:var(--ink);padding:6px 12px;border-radius:3px;
-    letter-spacing:.06em;font-size:11px;transition:.15s}
-  .btn:hover{border-color:var(--armed);color:var(--armed)}
-  .btn.warn:hover{border-color:var(--warn);color:var(--warn)}
-  .btn.danger{border-color:#3a1417;color:#ff8f99}
-  .btn.danger:hover{background:var(--intru);color:#fff;border-color:var(--intru)}
+  /* ── layout ── */
+  .shell {
+    display: grid;
+    grid-template-rows: 56px 1fr;
+    grid-template-columns: 260px 1fr;
+    min-height: 100vh;
+  }
 
-  /* status strip */
-  .strip{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:16px 0}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px 14px}
-  .stat .k{color:var(--faint);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
-  .stat .v{font-family:"Oxanium";font-weight:800;font-size:28px;margin-top:4px}
-  .stat.alert .v{color:var(--intru)}
-  .stat.ok .v{color:var(--armed)}
+  /* ── topbar ── */
+  .topbar {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--text);
+  }
+  .logo span { color: var(--red); }
 
-  /* intrusion banner */
-  #alert{display:none;margin:6px 0 18px;border:1px solid var(--intru);border-radius:4px;
-    background:linear-gradient(90deg,rgba(255,43,61,.16),rgba(255,43,61,.04));
-    padding:14px 16px;align-items:center;gap:16px}
-  #alert.on{display:flex;animation:throb 1s steps(2,end) infinite}
-  @keyframes throb{0%{box-shadow:0 0 0 rgba(255,43,61,0)}50%{box-shadow:0 0 26px rgba(255,43,61,.55)}100%{box-shadow:0 0 0 rgba(255,43,61,0)}}
-  #alert .ico{font-family:"Oxanium";font-weight:800;font-size:30px;color:var(--intru);
-    letter-spacing:.1em;text-shadow:0 0 16px rgba(255,43,61,.7)}
-  #alert .msg{flex:1}
-  #alert .msg b{color:#ff8f99}
-  #alert .thumbs{display:flex;gap:8px}
-  #alert img{width:64px;height:48px;object-fit:cover;border:1px solid var(--intru);border-radius:2px}
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
 
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,1fr)}}
-  section.card{background:var(--panel);border:1px solid var(--line);border-radius:5px;overflow:hidden}
-  .card h2{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
-    padding:11px 14px;border-bottom:1px solid var(--line);background:var(--panel2);
-    display:flex;align-items:center;gap:10px}
-  .card h2 .tag{margin-left:auto;color:var(--faint);font-size:10px}
-  .card .body{padding:14px}
+  .pulse-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(34,211,165,0.5);
+    animation: pulse-ring 2s ease-out infinite;
+  }
+  .pulse-dot.offline { background: var(--muted); box-shadow: none; animation: none; }
 
-  /* devices */
-  .dev{border:1px solid var(--line);border-radius:4px;padding:12px;margin-bottom:12px;background:var(--panel2)}
-  .dev:last-child{margin-bottom:0}
-  .dev .top{display:flex;align-items:center;gap:10px}
-  .dev .name{font-family:"Oxanium";font-weight:600;font-size:15px}
-  .dev .id{color:var(--faint);font-size:10px}
-  .badge{font-size:10px;padding:2px 7px;border-radius:3px;letter-spacing:.08em;border:1px solid}
-  .badge.armed{color:var(--armed);border-color:#15402c;background:rgba(54,224,138,.08)}
-  .badge.dis{color:var(--warn);border-color:#3d2f12;background:rgba(245,177,61,.08)}
-  .dev .meta{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;margin:10px 0;color:var(--dim);font-size:11px}
-  .dev .meta b{color:var(--ink);font-weight:400}
-  .dev .ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:10px}
-  .dev .ctrl label{color:var(--faint);font-size:10px;letter-spacing:.1em}
-  input[type=number]{width:64px;background:#0a1113;border:1px solid var(--line);color:var(--ink);
-    font-family:"JetBrains Mono";padding:4px 6px;border-radius:3px}
-  .dev .lastimg{width:72px;height:54px;object-fit:cover;border:1px solid var(--line);border-radius:3px;cursor:pointer}
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(34,211,165,0.45); }
+    70%  { box-shadow: 0 0 0 8px rgba(34,211,165,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,211,165,0); }
+  }
 
-  /* gallery */
-  .gal{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-  @media(max-width:600px){.gal{grid-template-columns:repeat(3,1fr)}}
-  .shot{position:relative;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:#0a1113}
-  .shot.unack{border-color:var(--intru);box-shadow:0 0 0 1px rgba(255,43,61,.4)}
-  .shot img{width:100%;height:78px;object-fit:cover;display:block;cursor:pointer}
-  .shot .cap{font-size:9.5px;color:var(--dim);padding:3px 5px;display:flex;justify-content:space-between}
-  .shot .cap .sc{color:var(--warn)}
-  .shot .x{position:absolute;top:3px;right:3px;font-size:9px;padding:1px 5px;cursor:pointer;
-    background:rgba(0,0,0,.6);border:1px solid var(--intru);color:#ff8f99;border-radius:2px}
+  .status-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .status-label b { color: var(--green); font-weight: 700; }
+  .status-label.offline b { color: var(--muted); }
 
-  /* logs */
-  .logs{max-height:520px;overflow:auto}
-  .logf{display:flex;gap:6px;margin-bottom:10px}
-  .logf .btn.active{border-color:var(--cyan);color:var(--cyan)}
-  table{width:100%;border-collapse:collapse;font-size:11px}
-  td{padding:4px 6px;border-bottom:1px solid rgba(29,44,48,.5);vertical-align:top}
-  td.t{color:var(--faint);white-space:nowrap;width:62px}
-  .lv{font-weight:600;letter-spacing:.06em}
-  .lv.INFO{color:var(--cyan)} .lv.WARN{color:var(--warn)} .lv.ALERT{color:var(--intru)}
-  .ev{color:var(--dim)}
+  .clock {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
 
-  /* modal */
-  #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:20;
-    align-items:center;justify-content:center;padding:24px}
-  #modal.on{display:flex}
-  #modal img{max-width:90vw;max-height:84vh;border:1px solid var(--line);box-shadow:0 0 40px rgba(0,0,0,.8)}
-  .muted{color:var(--faint);text-align:center;padding:18px;font-size:11px}
-  .blink{animation:bl 1.2s steps(2) infinite}@keyframes bl{50%{opacity:.25}}
+  /* ── sidebar ── */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .sidebar-section {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--muted);
+    text-transform: uppercase;
+    padding: 0 8px;
+    margin: 8px 0 4px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 400;
+    transition: background 0.15s, color 0.15s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .nav-item.active { background: rgba(99,102,241,0.12); color: var(--accent); }
+
+  .nav-icon {
+    width: 16px; height: 16px;
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+  .nav-item.active .nav-icon { opacity: 1; }
+
+  .device-card {
+    margin-top: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--card);
+  }
+  .device-name {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .device-id {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    word-break: break-all;
+  }
+  .device-stat {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .device-stat b { font-weight: 500; color: var(--text); }
+
+  /* ── main ── */
+  .main {
+    padding: 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* ── alert banner ── */
+  .alert-banner {
+    background: var(--red-dim);
+    border: 1px solid var(--red);
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: opacity 0.3s, transform 0.3s;
+    pointer-events: none;
+  }
+  .alert-banner.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .alert-icon {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--red-glow);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    animation: alert-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes alert-pulse {
+    0%, 100% { transform: scale(1); }
+    50%       { transform: scale(1.1); }
+  }
+  .alert-icon svg { width: 18px; height: 18px; stroke: var(--red); }
+  .alert-title {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--red);
+  }
+  .alert-sub {
+    font-size: 12px;
+    color: rgba(244,63,94,0.7);
+    margin-top: 2px;
+  }
+  .alert-dismiss {
+    margin-left: auto;
+    background: none;
+    border: 1px solid rgba(244,63,94,0.3);
+    border-radius: 5px;
+    color: var(--red);
+    padding: 5px 12px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .alert-dismiss:hover { background: var(--red-glow); }
+
+  /* ── stat cards ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .stat-value.accent { color: var(--accent); }
+  .stat-value.danger { color: var(--red); }
+  .stat-value.safe   { color: var(--green); }
+  .stat-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  /* ── panel header ── */
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .panel-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── image grid ── */
+  .image-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+  }
+
+  .img-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.2s, transform 0.15s;
+  }
+  .img-card:hover {
+    border-color: var(--border-hi);
+    transform: translateY(-2px);
+  }
+  .img-card.newest {
+    border-color: var(--red);
+    box-shadow: 0 0 0 1px var(--red-dim);
+    animation: new-card-in 0.4s ease-out;
+  }
+  @keyframes new-card-in {
+    from { opacity: 0; transform: scale(0.97) translateY(8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .img-wrap {
+    position: relative;
+    aspect-ratio: 4/3;
+    background: #0d0d10;
+    overflow: hidden;
+  }
+  .img-wrap img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: opacity 0.3s;
+  }
+  .img-wrap img.loading { opacity: 0; }
+
+  .img-badge {
+    position: absolute;
+    top: 8px; right: 8px;
+    background: var(--red);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+  .img-badge.high { background: var(--red); }
+  .img-badge.mid  { background: var(--amber); color: #1a1000; }
+  .img-badge.low  { background: var(--muted); }
+
+  .score-bar {
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 3px;
+    background: var(--red);
+    transition: width 0.4s;
+  }
+
+  .img-meta {
+    padding: 12px 14px;
+  }
+  .img-device {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--text);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .img-device span { color: var(--muted); font-weight: 400; }
+  .img-ts {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── box overlay ── */
+  .bbox-svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .bbox-rect {
+    fill: none;
+    stroke: var(--red);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+  }
+
+  /* ── empty state ── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 64px;
+    color: var(--muted);
+  }
+  .empty-icon {
+    width: 48px; height: 48px;
+    opacity: 0.3;
+  }
+  .empty-text {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  /* ── lightbox ── */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.88);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img {
+    max-width: 100%;
+    max-height: 75vh;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .lightbox-info {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    display: flex;
+    gap: 20px;
+  }
+  .lightbox-info b { color: var(--text); }
+  .lightbox-close {
+    position: absolute;
+    top: 20px; right: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    padding: 6px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  /* ── toast ── */
+  .toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    background: var(--red);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 12px 20px;
+    border-radius: 8px;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: transform 0.3s, opacity 0.3s;
+    z-index: 200;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  /* ── scrollbar ── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="brand">ESP <b>GUARD</b> VISION</div>
-    <span class="pill"><span id="conn" class="dot"></span><span id="connTxt">conectando…</span></span>
-    <div class="spacer"></div>
-    <span class="pill" id="clock">--:--:--</span>
-    <button class="btn warn" id="soundBtn">🔇 SOM: OFF</button>
+
+<div class="shell">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="logo">KII<span>R</span>A <span style="color:var(--muted);font-size:10px;letter-spacing:0.06em;vertical-align:middle;">GUARD VISION</span></div>
+    <div class="topbar-right">
+      <div class="status-label" id="conn-label">
+        <div class="pulse-dot" id="pulse-dot"></div>
+        <span>Backend: <b id="conn-text">conectando…</b></span>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
   </header>
 
-  <div class="strip">
-    <div class="stat ok"><div class="k">Dispositivos online</div><div class="v"><span id="sOnline">0</span><span style="color:var(--faint);font-size:16px">/<span id="sTotal">0</span></span></div></div>
-    <div class="stat ok"><div class="k">Armados</div><div class="v" id="sArmed">0</div></div>
-    <div class="stat alert"><div class="k">Alertas pendentes</div><div class="v" id="sUnack">0</div></div>
-    <div class="stat"><div class="k">Intrusões 24h</div><div class="v" id="s24">0</div></div>
-    <div class="stat"><div class="k">Total registrado</div><div class="v" id="sTot">0</div></div>
-  </div>
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section">Visualização</div>
+    <button class="nav-item active">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Live Feed
+    </button>
 
-  <div id="alert">
-    <div class="ico blink">⚠ INTRUSÃO</div>
-    <div class="msg" id="alertMsg"></div>
-    <div class="thumbs" id="alertThumbs"></div>
-    <button class="btn danger" id="ackAllBtn">RECONHECER TUDO</button>
-  </div>
+    <div class="sidebar-section" style="margin-top:16px;">Filtros</div>
+    <button class="nav-item" id="btn-all" onclick="setFilter('all')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/>
+      </svg>
+      Todas as detecções
+    </button>
+    <button class="nav-item" id="btn-high" onclick="setFilter('high')">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+      </svg>
+      Alta confiança ≥ 0.85
+    </button>
 
-  <div class="grid">
-    <div>
-      <section class="card">
-        <h2>Dispositivos <span class="tag" id="devTag"></span></h2>
-        <div class="body" id="devices"><div class="muted">sem dispositivos ainda — ligue uma KIIRA</div></div>
-      </section>
+    <div id="device-panel" class="device-card" style="display:none">
+      <div class="device-name">ESP32-S3</div>
+      <div class="device-id" id="sidebar-device-id">—</div>
+      <div class="device-stat">Última detecção <b id="sidebar-last-seen">—</b></div>
+      <div class="device-stat">Score <b id="sidebar-last-score">—</b></div>
+    </div>
+  </aside>
 
-      <section class="card" style="margin-top:18px">
-        <h2>Evidências recentes <span class="tag">clique p/ ampliar</span></h2>
-        <div class="body"><div class="gal" id="gallery"></div></div>
-      </section>
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- ALERT BANNER -->
+    <div class="alert-banner" id="alert-banner">
+      <div class="alert-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor"/>
+          <line x1="12" y1="9" x2="12" y2="13" stroke="currentColor"/>
+          <line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor"/>
+        </svg>
+      </div>
+      <div>
+        <div class="alert-title">PESSOA DETECTADA</div>
+        <div class="alert-sub" id="alert-sub">aguardando dados…</div>
+      </div>
+      <button class="alert-dismiss" onclick="dismissAlert()">DISPENSAR</button>
     </div>
 
-    <section class="card">
-      <h2>Registro de eventos <span class="tag" id="logTag"></span></h2>
-      <div class="body">
-        <div class="logf">
-          <button class="btn active" data-lv="">TODOS</button>
-          <button class="btn" data-lv="ALERT">ALERTA</button>
-          <button class="btn" data-lv="WARN">WARN</button>
-          <button class="btn" data-lv="INFO">INFO</button>
-        </div>
-        <div class="logs"><table id="logTable"></table></div>
+    <!-- STATS -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Total hoje</div>
+        <div class="stat-value accent" id="stat-total">0</div>
+        <div class="stat-sub">detecções registradas</div>
       </div>
-    </section>
+      <div class="stat-card">
+        <div class="stat-label">Alta confiança</div>
+        <div class="stat-value danger" id="stat-high">0</div>
+        <div class="stat-sub">score ≥ 0.85</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Dispositivos</div>
+        <div class="stat-value safe" id="stat-devices">0</div>
+        <div class="stat-sub">ativos</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Último evento</div>
+        <div class="stat-value" id="stat-last" style="font-size:16px;padding-top:4px;">—</div>
+        <div class="stat-sub" id="stat-last-device">nenhum evento</div>
+      </div>
+    </div>
+
+    <!-- FEED -->
+    <div>
+      <div class="panel-header">
+        <span class="panel-title">Feed de imagens</span>
+        <span class="panel-count" id="panel-count"></span>
+      </div>
+      <div class="image-grid" id="image-grid">
+        <div class="empty-state">
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <div class="empty-text">Aguardando imagens do sensor…</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox(event)">
+  <button class="lightbox-close" onclick="closeLightbox()">ESC / FECHAR</button>
+  <img id="lb-img" src="" alt="Detecção ampliada">
+  <div class="lightbox-info">
+    <span>Dispositivo: <b id="lb-device">—</b></span>
+    <span>Score: <b id="lb-score">—</b></span>
+    <span>Horário: <b id="lb-ts">—</b></span>
+    <span>Bounding box: <b id="lb-box">—</b></span>
   </div>
 </div>
 
-<div id="modal"><img id="modalImg" src="" alt=""></div>
+<!-- TOAST -->
+<div class="toast" id="toast">⚠ PESSOA DETECTADA</div>
 
 <script>
-const $ = s => document.querySelector(s);
-const api = async (u, opt) => { const r = await fetch(u, opt); if(!r.ok) throw new Error(r.status); return r.json(); };
-const OP = "operador-web";
-let logLevel = "";
-let soundOn = false, audioCtx=null, sirenTimer=null, sirenOsc=null, sirenGain=null;
+  // ── Config ──────────────────────────────────────────────────────────────
+  // Muda para o IP do seu servidor se acessar de outro dispositivo
+  const BACKEND = window.location.origin || 'http://localhost:8080';
+  const POLL_MS  = 3000;   // intervalo de polling (ms)
+  const MAX_SHOW = 20;     // máx. cards exibidos
 
-/* ---------- relógio ---------- */
-setInterval(()=>{ $("#clock").textContent = new Date().toLocaleTimeString("pt-BR"); }, 1000);
+  // ── Estado ──────────────────────────────────────────────────────────────
+  let lastKnownId = null;
+  let allDetections = [];
+  let currentFilter = 'all';
+  let online = false;
 
-/* ---------- sirene (Web Audio) ---------- */
-function ensureAudio(){
-  if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
-  if(audioCtx.state==="suspended") audioCtx.resume();
-}
-function startSiren(){
-  if(!soundOn || sirenOsc) return;
-  ensureAudio();
-  sirenOsc = audioCtx.createOscillator();
-  sirenGain = audioCtx.createGain();
-  sirenOsc.type="sawtooth";
-  sirenGain.gain.value=0.05;
-  sirenOsc.connect(sirenGain).connect(audioCtx.destination);
-  sirenOsc.start();
-  let hi=false;
-  const sweep=()=>{ if(!sirenOsc)return; const t=audioCtx.currentTime;
-    sirenOsc.frequency.cancelScheduledValues(t);
-    sirenOsc.frequency.setValueAtTime(hi?920:560,t);
-    sirenOsc.frequency.linearRampToValueAtTime(hi?560:920,t+0.5); hi=!hi; };
-  sweep(); sirenTimer=setInterval(sweep,500);
-}
-function stopSiren(){
-  if(sirenTimer){clearInterval(sirenTimer);sirenTimer=null;}
-  if(sirenOsc){try{sirenOsc.stop();}catch(e){} sirenOsc.disconnect(); sirenOsc=null;}
-  if(sirenGain){sirenGain.disconnect();sirenGain=null;}
-}
-$("#soundBtn").onclick = ()=>{
-  soundOn=!soundOn;
-  $("#soundBtn").textContent = soundOn ? "🔊 SOM: ON" : "🔇 SOM: OFF";
-  $("#soundBtn").classList.toggle("warn", !soundOn);
-  if(soundOn){ ensureAudio(); } else { stopSiren(); }
-};
-
-/* ---------- ações ---------- */
-async function setConfig(id, patch){
-  try{ await api(`/api/devices/${id}/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)}); poll(); }
-  catch(e){ alert("Falha ao salvar config: "+e.message); }
-}
-async function ackAll(id){ await api(`/api/devices/${id}/ack_all`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:OP})}); poll(); }
-async function ackOne(id){ await api(`/api/detections/${id}/ack`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:OP})}); poll(); }
-$("#ackAllBtn").onclick = async ()=>{ try{ const a=await api("/api/alerts"); for(const g of a.groups){ await ackAll(g.device_id); } }catch(e){} };
-
-/* modal */
-function openImg(u){ $("#modalImg").src=u; $("#modal").classList.add("on"); }
-$("#modal").onclick = ()=> $("#modal").classList.remove("on");
-
-/* filtros de log */
-document.querySelectorAll(".logf .btn").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".logf .btn").forEach(x=>x.classList.remove("active"));
-  b.classList.add("active"); logLevel=b.dataset.lv; renderLogs();
-});
-
-/* ---------- util ---------- */
-const ago = iso => {
-  const s = Math.max(0,(Date.now()-new Date(iso).getTime())/1000);
-  if(s<60) return Math.floor(s)+"s"; if(s<3600) return Math.floor(s/60)+"m";
-  if(s<86400) return Math.floor(s/3600)+"h"; return Math.floor(s/86400)+"d";
-};
-const hhmm = iso => new Date(iso).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-
-/* ---------- render ---------- */
-function renderStatus(s){
-  $("#sOnline").textContent=s.devices_online; $("#sTotal").textContent=s.devices_total;
-  $("#sArmed").textContent=s.devices_armed; $("#sUnack").textContent=s.unacknowledged;
-  $("#s24").textContent=s.detections_24h; $("#sTot").textContent=s.detections_total;
-}
-function renderDevices(list){
-  $("#devTag").textContent = list.length+" un.";
-  if(!list.length){ $("#devices").innerHTML='<div class="muted">sem dispositivos ainda — ligue uma KIIRA</div>'; return; }
-  $("#devices").innerHTML = list.map(d=>`
-    <div class="dev">
-      <div class="top">
-        <span class="dot ${d.online?'live':'dead'}"></span>
-        <span class="name">${esc(d.name)}</span>
-        <span class="id">${esc(d.device_id)}</span>
-        <span style="flex:1"></span>
-        <span class="badge ${d.armed?'armed':'dis'}">${d.armed?'ARMADO':'DESARMADO'}</span>
-      </div>
-      <div class="meta">
-        <div>Estado: <b>${d.online?'ONLINE':'OFFLINE'}</b></div>
-        <div>Visto: <b>${d.last_seen?ago(d.last_seen)+' atrás':'—'}</b></div>
-        <div>IP: <b>${esc(d.last_ip||'—')}</b></div>
-        <div>Firmware: <b>${esc(d.firmware||'—')}</b></div>
-        <div>Detecções: <b>${d.detections}</b></div>
-        <div>Pendentes: <b style="color:${d.unacknowledged?'var(--intru)':'var(--ink)'}">${d.unacknowledged}</b></div>
-      </div>
-      <div class="ctrl">
-        <button class="btn ${d.armed?'warn':''}" onclick="setConfig('${d.device_id}',{detect:${!d.armed}})">${d.armed?'DESARMAR':'ARMAR'}</button>
-        <label>min_score</label>
-        <input type="number" min="0" max="1" step="0.05" value="${d.min_score.toFixed(2)}" id="ms_${cssId(d.device_id)}">
-        <button class="btn" onclick="setConfig('${d.device_id}',{min_score:parseFloat(document.getElementById('ms_${cssId(d.device_id)}').value)})">SALVAR</button>
-        ${d.unacknowledged?`<button class="btn danger" onclick="ackAll('${d.device_id}')">RECONHECER (${d.unacknowledged})</button>`:''}
-        <span style="flex:1"></span>
-        ${d.last_detection?`<img class="lastimg" src="${d.last_detection.url}" onclick="openImg('${d.last_detection.url}')">`:''}
-      </div>
-    </div>`).join("");
-}
-function renderGallery(list){
-  if(!list.length){ $("#gallery").innerHTML='<div class="muted">nenhuma evidência</div>'; return; }
-  $("#gallery").innerHTML = list.map(d=>`
-    <div class="shot ${d.acknowledged?'':'unack'}">
-      ${d.acknowledged?'':`<span class="x" onclick="ackOne(${d.id})">OK</span>`}
-      <img src="${d.url}" onclick="openImg('${d.url}')">
-      <div class="cap"><span>${esc(d.device_id)}</span><span class="sc">${(d.score*100).toFixed(0)}%</span></div>
-      <div class="cap"><span>${hhmm(d.timestamp)}</span><span>${ago(d.timestamp)}</span></div>
-    </div>`).join("");
-}
-let logCache=[];
-function renderLogs(){
-  const rows = logLevel ? logCache.filter(l=>l.level===logLevel) : logCache;
-  $("#logTag").textContent = rows.length+" linhas";
-  if(!rows.length){ $("#logTable").innerHTML='<tr><td class="muted">sem eventos</td></tr>'; return; }
-  $("#logTable").innerHTML = rows.map(l=>`
-    <tr>
-      <td class="t">${hhmm(l.timestamp)}</td>
-      <td><span class="lv ${l.level}">${l.level}</span></td>
-      <td><span class="ev">${esc(l.event)}</span> ${esc(l.message)} ${l.device_id?`<span class="id" style="color:var(--faint)">@${esc(l.device_id)}</span>`:''}</td>
-    </tr>`).join("");
-}
-function renderAlert(a){
-  const box=$("#alert");
-  if(a.total>0){
-    box.classList.add("on");
-    const names=a.groups.map(g=>`<b>${esc(g.device_id)}</b> (${g.count})`).join(" · ");
-    $("#alertMsg").innerHTML = `Presença confirmada em ${names}. Última: ${hhmm(a.groups[0].latest_ts)} — score ${(a.groups[0].latest_score*100).toFixed(0)}%.`;
-    $("#alertThumbs").innerHTML = a.groups.slice(0,4).map(g=>`<img src="${g.url}" onclick="openImg('${g.url}')">`).join("");
-    startSiren();
-  } else {
-    box.classList.remove("on"); stopSiren();
+  // ── Clock ────────────────────────────────────────────────────────────────
+  function updateClock() {
+    document.getElementById('clock').textContent =
+      new Date().toLocaleTimeString('pt-BR', { hour12: false });
   }
-}
-const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const cssId = s => String(s).replace(/[^a-zA-Z0-9_]/g,"_");
+  setInterval(updateClock, 1000);
+  updateClock();
 
-/* ---------- loop ---------- */
-function setConn(ok){
-  $("#conn").className = "dot "+(ok?"live":"dead");
-  $("#connTxt").textContent = ok ? "central online" : "sem backend";
-}
-async function poll(){
-  try{
-    const [st,devs,det,logs,al] = await Promise.all([
-      api("/api/status"), api("/api/devices"), api("/api/detections?limit=24"),
-      api("/api/logs?limit=120"), api("/api/alerts"),
-    ]);
-    setConn(true);
-    renderStatus(st); renderDevices(devs); renderGallery(det);
-    logCache=logs; renderLogs(); renderAlert(al);
-  }catch(e){ setConn(false); }
-}
-window.setConfig=setConfig; window.ackAll=ackAll; window.ackOne=ackOne; window.openImg=openImg;
-poll(); setInterval(poll,3000);
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function fmtTs(iso) {
+    const d = new Date(iso);
+    return d.toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+  }
+
+  function fmtRelative(iso) {
+    const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if (diff < 5)   return 'agora mesmo';
+    if (diff < 60)  return `${diff}s atrás`;
+    if (diff < 3600) return `${Math.floor(diff/60)}min atrás`;
+    return `${Math.floor(diff/3600)}h atrás`;
+  }
+
+  function scoreClass(s) {
+    if (s >= 0.85) return 'high';
+    if (s >= 0.6)  return 'mid';
+    return 'low';
+  }
+
+  // ── Badge de score ───────────────────────────────────────────────────────
+  function scoreBadgeLabel(s) {
+    if (s >= 0.85) return (s * 100).toFixed(0) + '%';
+    return (s * 100).toFixed(0) + '%';
+  }
+
+  // ── Render cards ─────────────────────────────────────────────────────────
+  function renderCard(d, isNew) {
+    const card = document.createElement('div');
+    card.className = 'img-card' + (isNew ? ' newest' : '');
+    card.dataset.id = d.id;
+
+    const imgUrl  = `${BACKEND}/uploads/${d.filename}`;
+    const barW    = Math.round(d.score * 100);
+    const sc      = d.score;
+    const sClass  = scoreClass(sc);
+
+    card.innerHTML = `
+      <div class="img-wrap">
+        <img src="${imgUrl}" alt="Detecção ${d.id}" class="loading"
+             onload="this.classList.remove('loading')"
+             onerror="this.src=''; this.style.opacity='0.2'">
+        ${d.box ? buildBboxSvg(d.box) : ''}
+        <div class="img-badge ${sClass}">${scoreBadgeLabel(sc)}</div>
+        <div class="score-bar" style="width:${barW}%"></div>
+      </div>
+      <div class="img-meta">
+        <div class="img-device">
+          ${d.device_id.slice(-6)}
+          <span>#${d.id}</span>
+        </div>
+        <div class="img-ts">${fmtTs(d.timestamp)}</div>
+      </div>
+    `;
+
+    card.addEventListener('click', () => openLightbox(d));
+    return card;
+  }
+
+  function buildBboxSvg(boxStr) {
+    const [bx, by, bw, bh] = boxStr.split(',').map(Number);
+    // A câmera captura VGA (640x480); mapeamos para o viewBox da imagem
+    return `
+      <svg class="bbox-svg" viewBox="0 0 640 480" preserveAspectRatio="none">
+        <rect class="bbox-rect" x="${bx}" y="${by}" width="${bw}" height="${bh}"/>
+      </svg>`;
+  }
+
+  // ── Refresh grid ─────────────────────────────────────────────────────────
+  function refreshGrid() {
+    const filtered = currentFilter === 'high'
+      ? allDetections.filter(d => d.score >= 0.85)
+      : allDetections;
+
+    const grid = document.getElementById('image-grid');
+    document.getElementById('panel-count').textContent =
+      `${filtered.length} imagem${filtered.length !== 1 ? 'ns' : ''}`;
+
+    if (filtered.length === 0) {
+      grid.innerHTML = `
+        <div class="empty-state">
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="3" y="3" width="18" height="18" rx="3"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <div class="empty-text">Nenhuma detecção encontrada</div>
+        </div>`;
+      return;
+    }
+
+    // Preserva cards existentes, insere novos no topo
+    const existingIds = new Set(
+      [...grid.querySelectorAll('.img-card')].map(el => Number(el.dataset.id))
+    );
+
+    const newCards = filtered.filter(d => !existingIds.has(d.id));
+    const isFirstLoad = existingIds.size === 0;
+
+    if (newCards.length > 0 && !isFirstLoad) {
+      // insere no início
+      newCards.reverse().forEach(d => {
+        grid.insertBefore(renderCard(d, true), grid.firstChild);
+      });
+      // remove excedentes
+      const allCards = grid.querySelectorAll('.img-card');
+      if (allCards.length > MAX_SHOW) {
+        for (let i = MAX_SHOW; i < allCards.length; i++) allCards[i].remove();
+      }
+    } else {
+      // primeiro load: renderiza tudo
+      grid.innerHTML = '';
+      filtered.slice(0, MAX_SHOW).forEach(d => grid.appendChild(renderCard(d, false)));
+    }
+  }
+
+  // ── Stats ────────────────────────────────────────────────────────────────
+  function updateStats() {
+    const today = new Date().toDateString();
+    const todayDets = allDetections.filter(d => new Date(d.timestamp).toDateString() === today);
+    const highConf  = todayDets.filter(d => d.score >= 0.85);
+
+    const devices = new Set(allDetections.map(d => d.device_id));
+
+    document.getElementById('stat-total').textContent = todayDets.length;
+    document.getElementById('stat-high').textContent  = highConf.length;
+    document.getElementById('stat-devices').textContent = devices.size;
+
+    if (allDetections.length > 0) {
+      const latest = allDetections[0];
+      document.getElementById('stat-last').textContent = fmtRelative(latest.timestamp);
+      document.getElementById('stat-last-device').textContent = 'ID: ' + latest.device_id.slice(-6);
+    }
+  }
+
+  // ── Sidebar device ────────────────────────────────────────────────────────
+  async function updateSidebarDevice() {
+    try {
+      const r = await fetch(`${BACKEND}/status`);
+      if (!r.ok) return;
+      const statuses = await r.json();
+      if (statuses.length > 0) {
+        const dev = statuses[0];
+        document.getElementById('device-panel').style.display = '';
+        document.getElementById('sidebar-device-id').textContent = dev.device_id;
+        document.getElementById('sidebar-last-seen').textContent =
+          dev.last_seen ? fmtRelative(dev.last_seen) : '—';
+        document.getElementById('sidebar-last-score').textContent =
+          dev.last_score != null ? (dev.last_score * 100).toFixed(1) + '%' : '—';
+      }
+    } catch (e) {}
+  }
+
+  // ── Alert ─────────────────────────────────────────────────────────────────
+  function showAlert(detection) {
+    const banner = document.getElementById('alert-banner');
+    document.getElementById('alert-sub').textContent =
+      `Dispositivo ${detection.device_id.slice(-6)} · Score ${(detection.score * 100).toFixed(1)}% · ${fmtTs(detection.timestamp)}`;
+    banner.classList.add('visible');
+
+    // toast
+    const toast = document.getElementById('toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 4000);
+  }
+
+  function dismissAlert() {
+    document.getElementById('alert-banner').classList.remove('visible');
+  }
+
+  // ── Connection status ──────────────────────────────────────────────────────
+  function setOnline(val) {
+    if (online === val) return;
+    online = val;
+    const dot   = document.getElementById('pulse-dot');
+    const label = document.getElementById('conn-label');
+    const text  = document.getElementById('conn-text');
+    if (val) {
+      dot.classList.remove('offline');
+      label.classList.remove('offline');
+      text.textContent = 'online';
+    } else {
+      dot.classList.add('offline');
+      label.classList.add('offline');
+      text.textContent = 'offline';
+    }
+  }
+
+  // ── Polling ───────────────────────────────────────────────────────────────
+  async function poll() {
+    try {
+      const r = await fetch(`${BACKEND}/images?limit=50`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+
+      setOnline(true);
+      const data = await r.json();
+
+      // detecta novos (ids mais altos que o último visto)
+      const topId = data.length > 0 ? data[0].id : null;
+
+      if (lastKnownId !== null && topId !== null && topId > lastKnownId) {
+        const newest = data.filter(d => d.id > lastKnownId);
+        // mostra alerta apenas se score relevante
+        const relevant = newest.filter(d => d.score >= 0.5);
+        if (relevant.length > 0) showAlert(relevant[0]);
+      }
+
+      allDetections = data;
+      if (topId !== null) lastKnownId = topId;
+
+      refreshGrid();
+      updateStats();
+      updateSidebarDevice();
+
+    } catch (e) {
+      setOnline(false);
+    }
+  }
+
+  // ── Filter ────────────────────────────────────────────────────────────────
+  function setFilter(f) {
+    currentFilter = f;
+    document.getElementById('btn-all').classList.toggle('active', f === 'all');
+    document.getElementById('btn-high').classList.toggle('active', f === 'high');
+    // limpa grid para re-render completo
+    const grid = document.getElementById('image-grid');
+    grid.innerHTML = '';
+    refreshGrid();
+  }
+
+  // ── Lightbox ───────────────────────────────────────────────────────────────
+  function openLightbox(d) {
+    document.getElementById('lb-img').src = `${BACKEND}/uploads/${d.filename}`;
+    document.getElementById('lb-device').textContent = d.device_id;
+    document.getElementById('lb-score').textContent  = (d.score * 100).toFixed(1) + '%';
+    document.getElementById('lb-ts').textContent     = fmtTs(d.timestamp);
+    document.getElementById('lb-box').textContent    = d.box || 'n/d';
+    document.getElementById('lightbox').classList.add('open');
+  }
+
+  function closeLightbox(e) {
+    if (!e || e.target === document.getElementById('lightbox') || e.currentTarget.tagName === 'BUTTON') {
+      document.getElementById('lightbox').classList.remove('open');
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeLightbox({});
+  });
+
+  // ── Start ─────────────────────────────────────────────────────────────────
+  poll();
+  setInterval(poll, POLL_MS);
 </script>
 </body>
 </html>
