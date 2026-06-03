@@ -1,0 +1,3 @@
+KR2-007 - Problema com artefatos em todas as imagens.
+KR2-002 - Problema ao alocar a PSRAM.
+KR1-003 -

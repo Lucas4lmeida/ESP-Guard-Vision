@@ -53,7 +53,7 @@ static char device_id_str[18] = {0};
 
 // Botões on-board (pull-up interno: repouso = 1, pressionado = 0).
 // GPIO45 é pino de strapping no boot, mas livre para uso como entrada depois.
-#define BUTTON1_GPIO        GPIO_NUM_41
+#define BUTTON1_GPIO        GPIO_NUM_45
 
 // ===== Gatilho por botão + FSM de detecção sob demanda =====
 // Em repouso a INFERÊNCIA fica desligada (parte cara); a câmera segue aquecida
@@ -599,7 +599,7 @@ static esp_err_t camera_init(void) {
     cfg.ledc_channel = LEDC_CHANNEL_0;
     cfg.pixel_format = PIXFORMAT_RGB565;
     cfg.frame_size = FRAMESIZE_XGA;
-    cfg.jpeg_quality = 10;
+    cfg.jpeg_quality = 16;
 
     // 3 buffers evitam o "Tearing" (glitch horizontal) pois o DMA tem mais folga
     cfg.fb_count = 3; 
@@ -607,7 +607,7 @@ static esp_err_t camera_init(void) {
 
     // WHEN_EMPTY garante que a IA leia um buffer que NÃO está sendo gravado pelo DMA
     cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY; 
-    cfg.sccb_i2c_port = -1; 
+    cfg.sccb_i2c_port = 1; 
 
     esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
