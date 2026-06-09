@@ -716,6 +716,7 @@ static void wifi_manager(void) {
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_set_config(WIFI_IF_STA, &wcfg);
         esp_wifi_start();
+        esp_wifi_set_max_tx_power(80);
 
         TickType_t start = xTaskGetTickCount();
         while (wifi_state != WIFI_STATE_STA_CONNECTED) {
@@ -776,9 +777,9 @@ static void button_init(void) {
     gpio_config_t io = {};
     io.pin_bit_mask = 1ULL << BUTTON1_GPIO;
     io.mode = GPIO_MODE_INPUT;
-    io.pull_up_en = GPIO_PULLUP_ENABLE;       // botão vai a nível baixo ao apertar
-    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io.intr_type = GPIO_INTR_NEGEDGE;         // borda de descida = pressionado
+    io.pull_up_en = GPIO_PULLUP_DISABLE;     
+    io.pull_down_en = GPIO_PULLDOWN_ENABLE; // Ativa pull-down interno para garantir LOW quando solto
+    io.intr_type = GPIO_INTR_POSEDGE;         // Gatilho na borda de subida (botão pressionado)
     gpio_config(&io);
     gpio_install_isr_service(0);
     gpio_isr_handler_add((gpio_num_t)BUTTON1_GPIO, button_isr, NULL);
