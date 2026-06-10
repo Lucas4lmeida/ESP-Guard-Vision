@@ -7,6 +7,32 @@
  * - Câmera OV5640 via I2C1 com correções de artefatos e endianness
  * - Armazenamento no MicroSD com proteção contra remoção
  * - Upload para backend FastAPI com retentativas e monitoramento
+ *
+ * ====================================================================
+ *  ESTRATÉGIA ANTI-CORRUPÇÃO (v2 — captura serializada)
+ * --------------------------------------------------------------------
+ *  A corrupção em faixas (bandas arco-íris) é STARVATION de DMA: o GDMA
+ *  da câmera escreve o frame na PSRAM enquanto a CPU martela a PSRAM
+ *  (inferência + fmt2jpg) e/ou a flash (faltas de cache do WiFi) no
+ *  mesmo controlador de memória externa (MSPI). Linhas se perdem -> lixo.
+ *
+ *  Princípio-chave: um frame só corre risco DURANTE a própria escrita do
+ *  DMA. Enquanto o framebuffer está SEGURADO (sem esp_camera_fb_return),
+ *  o DMA não escreve nele — logo inferência e fmt2jpg sobre o buffer
+ *  segurado são imunes. Toda a corrupção vinha de capturar o keeper no
+ *  meio do loop que estava inferindo/encodando o frame anterior.
+ *
+ *  Solução aplicada:
+ *   1) ST_VERIFY roda SÓ inferência (sem fmt2jpg) — remove o maior
+ *      poluidor de PSRAM do laço de captura.
+ *   2) ST_EVIDENCE captura cada keeper em JANELA SILENCIOSA: dreno de
+ *      frames com a CPU ociosa -> grab limpo -> segura o buffer ->
+ *      inferência + JPEG sobre o buffer segurado (frame que o DMA
+ *      escreve nesse meio tempo é sacrificial e descartado no próximo
+ *      dreno).
+ *   3) Upload e SD acontecem DEPOIS da fase de captura, nunca no meio.
+ *   4) A FSM roda numa task fixada no core 1; o WiFi fica no core 0.
+ * ====================================================================
  */
 
 #include <string.h>
@@ -16,6 +42,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "esp_attr.h"
 #include "esp_camera.h"
 #include "img_converters.h"
@@ -51,23 +78,29 @@ static char device_id_str[18] = {0};
 #define BUZZER_RESOLUTION   LEDC_TIMER_10_BIT
 #define BUZZER_DUTY_ON      (512)         // ~50% de 1023 (10 bits)
 
-// Botões on-board (pull-up interno: repouso = 1, pressionado = 0).
-// GPIO45 é pino de strapping no boot, mas livre para uso como entrada depois.
+// Gatilho de presença: sensor PIR no GPIO41 (pull-down, borda de subida).
 #define BUTTON1_GPIO        GPIO_NUM_41
 
-// ===== Gatilho por botão + FSM de detecção sob demanda =====
+// ===== Gatilho + FSM de detecção sob demanda =====
 // Em repouso a INFERÊNCIA fica desligada (parte cara); a câmera segue aquecida
 // (sensor ligado, AEC/AWB adaptando) para que o gatilho seja instantâneo.
-#define TRIGGER_DEBOUNCE_MS   200     // ignora repique do botão
+#define TRIGGER_DEBOUNCE_MS   200     // ignora repique do gatilho
 #define KEEPALIVE_MS          200     // dreno de 1 frame em repouso (mantém AEC quente)
 #define VERIFY_WINDOW_MS      1500    // janela máx. para confirmar presença
 #define VERIFY_MAX_FRAMES     8       // teto de frames analisados na verificação
 #define CONFIRM_HITS          2       // nº de acertos p/ confirmar (anti-falso-positivo)
 #define HIGH_CONFIDENCE       0.85f   // 1 frame >= isto confirma na hora (caminho rápido)
 #define MAX_EVIDENCE          3       // nº de evidências guardadas/enviadas
-#define EVIDENCE_SPACING_MS   400     // intervalo entre evidências extras (mostra deslocamento)
-#define TOPUP_WINDOW_MS       1500    // janela p/ completar evidências após confirmar
+#define EVIDENCE_SPACING_MS   400     // intervalo entre evidências (mostra deslocamento)
 #define COOLDOWN_MS           5000    // após registrar, ignora gatilhos
+
+// ---- Parâmetros da captura em janela silenciosa ----
+// DRENO: nº de frames descartados (grab+return) com a CPU ociosa antes de cada
+// keeper. Deve ser > fb_count para garantir que os buffers escritos durante a
+// contenção anterior sejam totalmente reciclados em condição limpa.
+#define EVIDENCE_DRAIN_FRAMES    5
+#define EVIDENCE_JPEG_QUALITY    90    // qualidade JPEG do fmt2jpg (0-100, maior = melhor)
+#define EVIDENCE_TOTAL_WINDOW_MS 8000  // teto de tempo p/ coletar MAX_EVIDENCE
 
 // Display SSD1306 (I2C0: SDA=14, SCL=21)
 #define I2C_DISPLAY_PORT    I2C_NUM_0
@@ -360,9 +393,11 @@ static void save_detection_to_sd(const uint8_t *jpg, size_t jpg_len, float score
     if (!sd_mounted || !sd_mutex) return;
     if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
 
-    static int counter = 0;
-    char fname[64];
-    snprintf(fname, sizeof(fname), "/sdcard/detect_%04d.jpg", counter++);
+    // Nome único por boot: <device>_<uptime_ms>_<random>.jpg evita sobrescrever.
+    char fname[96];
+    snprintf(fname, sizeof(fname), "/sdcard/%s_%lld_%04X.jpg",
+             device_id_str, (long long)(esp_timer_get_time() / 1000),
+             (unsigned)(esp_random() & 0xFFFF));
 
     FILE *f = fopen(fname, "wb");
     if (!f) {
@@ -579,6 +614,11 @@ static void fetch_config(void) {
 }
 
 // Câmera (Otimizada para OV5640 + ESP-DL)
+// XCLK fica em 20 MHz e a resolução em XGA. A estratégia anti-corrupção NÃO é
+// mais por banda (resolução/clock), e sim TEMPORAL: o keeper é capturado em
+// janela silenciosa (ver capture_evidence_clean). fb_count=3 dá folga para o
+// dreno reciclar buffers; WHEN_EMPTY garante que a IA leia um buffer que não
+// está sendo escrito pelo DMA.
 static esp_err_t camera_init(void) {
     camera_config_t cfg = {};
     cfg.pin_pwdn = -1;
@@ -593,7 +633,7 @@ static esp_err_t camera_init(void) {
     cfg.pin_pclk = 13;
 
     // OV5640 PRECISA de 20MHz para gerar RGB565 válido para a IA
-    cfg.xclk_freq_hz = 20000000; 
+    cfg.xclk_freq_hz = 20000000;
 
     cfg.ledc_timer = LEDC_TIMER_0;
     cfg.ledc_channel = LEDC_CHANNEL_0;
@@ -601,13 +641,13 @@ static esp_err_t camera_init(void) {
     cfg.frame_size = FRAMESIZE_XGA;
     cfg.jpeg_quality = 10;
 
-    // 3 buffers evitam o "Tearing" (glitch horizontal) pois o DMA tem mais folga
-    cfg.fb_count = 3; 
+    // 3 buffers dão folga ao dreno (recicla buffers contaminados) e ao DMA.
+    cfg.fb_count = 3;
     cfg.fb_location = CAMERA_FB_IN_PSRAM;
 
     // WHEN_EMPTY garante que a IA leia um buffer que NÃO está sendo gravado pelo DMA
-    cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY; 
-    cfg.sccb_i2c_port = -1; 
+    cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    cfg.sccb_i2c_port = -1;
 
     esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
@@ -763,7 +803,7 @@ static void wifi_manager(void) {
     esp_restart();
 }
 
-// ====================== Gatilho por botão (GPIO45) ======================
+// ====================== Gatilho de presença (PIR no GPIO41) ======================
 static volatile bool    s_btn_trigger = false;
 static volatile int64_t s_btn_us = 0;
 
@@ -777,13 +817,13 @@ static void button_init(void) {
     gpio_config_t io = {};
     io.pin_bit_mask = 1ULL << BUTTON1_GPIO;
     io.mode = GPIO_MODE_INPUT;
-    io.pull_up_en = GPIO_PULLUP_DISABLE;     
-    io.pull_down_en = GPIO_PULLDOWN_ENABLE; // Ativa pull-down interno para garantir LOW quando solto
-    io.intr_type = GPIO_INTR_POSEDGE;         // Gatilho na borda de subida (botão pressionado)
+    io.pull_up_en = GPIO_PULLUP_DISABLE;
+    io.pull_down_en = GPIO_PULLDOWN_ENABLE; // Pull-down interno garante LOW em repouso (PIR)
+    io.intr_type = GPIO_INTR_POSEDGE;       // Borda de subida = presença detectada pelo PIR
     gpio_config(&io);
     gpio_install_isr_service(0);
     gpio_isr_handler_add((gpio_num_t)BUTTON1_GPIO, button_isr, NULL);
-    ESP_LOGI(TAG, "Gatilho: botao no GPIO%d", BUTTON1_GPIO);
+    ESP_LOGI(TAG, "Gatilho: PIR no GPIO%d", BUTTON1_GPIO);
 }
 
 // Consome o gatilho com debounce (rejeita repiques dentro da janela).
@@ -797,16 +837,11 @@ static bool trigger_fired(void) {
     return true;
 }
 
-// ====================== Captura + inferência (1 frame) ======================
-// Pega um frame, roda o detector e (se want_jpeg) gera o JPEG do frame.
-// Retorna true se houve detecção com score >= min_score. O framebuffer é
-// devolvido AQUI (segura o buffer pelo menor tempo possível). Se gerar JPEG,
-// *out_jpg é alocado no heap e o chamador deve liberar com free().
-static bool detect_once(float *out_score, int *obx, int *oby, int *obw, int *obh,
-                        uint8_t **out_jpg, size_t *out_len, bool want_jpeg) {
-    if (out_jpg) *out_jpg = NULL;
-    if (out_score) *out_score = 0.0f;
-
+// ============== Verificação: 1 frame, SÓ inferência (sem JPEG) ==============
+// Esta é a parte barata. NÃO codifica JPEG — codificar aqui (fmt2jpg lê o
+// frame inteiro da PSRAM) é o que mais rouba banda do DMA e corrompe o frame
+// seguinte. A evidência de qualidade é capturada à parte (capture_evidence_clean).
+static bool detect_once(float *out_score) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) return false;
 
@@ -822,31 +857,9 @@ static bool detect_once(float *out_score, int *obx, int *oby, int *obw, int *obh
     for (auto &r : res) {
         if (r.score >= min_score && (!best || r.score > best->score)) best = &r;
     }
+    if (out_score) *out_score = best ? best->score : 0.0f;
     bool hit = (best != nullptr);
 
-    if (hit) {
-        // box = [x1,y1,x2,y2] (cantos) -> (x,y,larg,alt), limitado ao frame
-        int x1 = best->box[0], y1 = best->box[1];
-        int x2 = best->box[2], y2 = best->box[3];
-        if (x1 < 0) x1 = 0;
-        if (y1 < 0) y1 = 0;
-        if (x2 > fb->width)  x2 = fb->width;
-        if (y2 > fb->height) y2 = fb->height;
-        if (out_score) *out_score = best->score;
-        if (obx) *obx = x1;
-        if (oby) *oby = y1;
-        if (obw) *obw = (x2 > x1) ? (x2 - x1) : 0;
-        if (obh) *obh = (y2 > y1) ? (y2 - y1) : 0;
-
-        if (want_jpeg) {
-            uint8_t *jpg = NULL; size_t len = 0;
-            if (fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
-                        PIXFORMAT_RGB565, 90, &jpg, &len)) {
-                *out_jpg = jpg;
-                *out_len = len;
-            }
-        }
-    }
     esp_camera_fb_return(fb);
     return hit;
 }
@@ -862,6 +875,230 @@ typedef struct {
 static void evidence_free_all(evidence_t *ev, int n) {
     for (int i = 0; i < n; i++) {
         if (ev[i].jpg) { free(ev[i].jpg); ev[i].jpg = NULL; }
+    }
+}
+
+// ============== Captura de evidência em JANELA SILENCIOSA ==============
+// Princípio: um frame só corre risco de corrupção DMA DURANTE a própria
+// escrita. Enquanto o buffer está SEGURADO (sem fb_return), o DMA não escreve
+// nele — então inferência e fmt2jpg sobre o buffer segurado são imunes.
+//
+// Sequência:
+//  1) DRENO: cicla buffers com a CPU ociosa para descartar os frames escritos
+//     durante a contenção anterior (inferência/JPEG do keeper anterior). Como
+//     o dreno > fb_count, os últimos buffers reciclam em condição limpa.
+//  2) KEEPER: captura agora, com o barramento livre -> frame íntegro.
+//  3) Inferência sobre o keeper SEGURADO -> box/score atualizados. O DMA enche
+//     outro buffer (sacrificial) nesse meio tempo; será descartado no próximo
+//     dreno.
+//  4) fmt2jpg sobre o keeper SEGURADO -> JPEG limpo de alta qualidade.
+static bool capture_evidence_clean(evidence_t *out, float fallback_score) {
+    out->jpg = NULL;
+
+    // 1) Dreno com a CPU ociosa: nada além do DMA toca a PSRAM aqui.
+    for (int i = 0; i < EVIDENCE_DRAIN_FRAMES; i++) {
+        camera_fb_t *d = esp_camera_fb_get();
+        if (d) esp_camera_fb_return(d);
+    }
+
+    // 2) Keeper limpo, capturado em janela silenciosa.
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) return false;
+
+    // 3) Inferência no buffer SEGURADO (imune ao DMA) -> box/score.
+    dl::image::img_t img = {
+        .data     = fb->buf,
+        .width    = (uint16_t)fb->width,
+        .height   = (uint16_t)fb->height,
+        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565BE,
+    };
+    auto &res = s_detect->run(img);
+    const dl::detect::result_t *best = nullptr;
+    for (auto &r : res) {
+        if (r.score >= min_score && (!best || r.score > best->score)) best = &r;
+    }
+
+    float sc = fallback_score; int bx = 0, by = 0, bw = 0, bh = 0;
+    if (best) {
+        int x1 = best->box[0], y1 = best->box[1];
+        int x2 = best->box[2], y2 = best->box[3];
+        if (x1 < 0) x1 = 0;
+        if (y1 < 0) y1 = 0;
+        if (x2 > fb->width)  x2 = fb->width;
+        if (y2 > fb->height) y2 = fb->height;
+        sc = best->score;
+        bx = x1; by = y1;
+        bw = (x2 > x1) ? (x2 - x1) : 0;
+        bh = (y2 > y1) ? (y2 - y1) : 0;
+    }
+
+    // 4) JPEG no buffer SEGURADO. O frame que o DMA escreve agora é sacrificial.
+    uint8_t *jpg = NULL; size_t len = 0;
+    bool ok = fmt2jpg(fb->buf, fb->len, fb->width, fb->height,
+                      PIXFORMAT_RGB565, EVIDENCE_JPEG_QUALITY, &jpg, &len);
+
+    esp_camera_fb_return(fb);
+
+    if (!ok || !jpg) return false;
+    out->jpg = jpg; out->len = len; out->score = sc;
+    out->bx = bx; out->by = by; out->bw = bw; out->bh = bh;
+    return true;
+}
+
+// ====================== FSM de vigilância (task no core 1) ======================
+static void guard_task(void *arg) {
+    (void)arg;
+
+    typedef enum { ST_IDLE, ST_VERIFY, ST_EVIDENCE, ST_COOLDOWN } guard_state_t;
+    guard_state_t state = ST_IDLE;
+    g_state_str = "ARMADO";
+
+    TickType_t last_fetch = xTaskGetTickCount();
+    TickType_t last_disp  = 0;
+    int64_t cooldown_start = 0;
+
+    float confirmed_score  = 0.0f;
+    int   confirmed_hits   = 0;
+    int   confirmed_frames = 0;
+
+    s_btn_trigger = false;  // ignora qualquer gatilho acumulado no boot
+
+    while (1) {
+        switch (state) {
+
+        // ---------- REPOUSO: câmera quente, inferência desligada ----------
+        case ST_IDLE: {
+            g_detected = false;
+            g_state_str = enable_detection ? "ARMADO" : "DESARMADO";
+
+            if (enable_detection && trigger_fired()) {
+                state = ST_VERIFY;
+                g_state_str = "VERIFICANDO";
+                break;
+            }
+            // Keep-alive: drena 1 frame para manter AEC/AWB adaptando, SEM
+            // rodar inferência (barato). Garante que o primeiro frame
+            // pós-gatilho já esteja bem exposto.
+            if (enable_detection) {
+                camera_fb_t *fb = esp_camera_fb_get();
+                if (fb) esp_camera_fb_return(fb);
+            }
+            vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_MS));
+            break;
+        }
+
+        // ---------- VERIFICAÇÃO: confirma presença (só inferência) ----------
+        case ST_VERIFY: {
+            int   hits = 0;
+            int   frames = 0;
+            float best_sc = 0.0f;
+            bool  confirmed = false;
+            int64_t t0 = esp_timer_get_time();
+
+            while (!confirmed && frames < VERIFY_MAX_FRAMES &&
+                   (esp_timer_get_time() - t0) < (int64_t)VERIFY_WINDOW_MS * 1000) {
+                float sc = 0;
+                bool hit = detect_once(&sc);   // SÓ inferência — sem encode
+                frames++;
+                if (hit) {
+                    hits++;
+                    if (sc > best_sc) best_sc = sc;
+                    // Caminho rápido: 1 frame muito confiante confirma na hora.
+                    if (sc >= HIGH_CONFIDENCE || hits >= CONFIRM_HITS) confirmed = true;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));   // cede CPU / alimenta watchdog
+            }
+
+            if (confirmed) {
+                confirmed_score  = best_sc;
+                confirmed_hits   = hits;
+                confirmed_frames = frames;
+                state = ST_EVIDENCE;
+            } else {
+                ESP_LOGI(TAG, "Falso positivo: presenca nao confirmada (%d frame(s))", frames);
+                g_detected = false;
+                s_btn_trigger = false;
+                update_display();
+                state = ST_IDLE;
+            }
+            break;
+        }
+
+        // ---------- EVIDÊNCIA: captura limpa + (depois) rede/SD ----------
+        case ST_EVIDENCE: {
+            ESP_LOGI(TAG, "INTRUSO confirmado (%d acerto(s) em %d frame(s))",
+                     confirmed_hits, confirmed_frames);
+            g_detected   = true;
+            g_state_str  = "INTRUSO";
+            g_last_score = confirmed_score;
+            update_display();
+            buzzer_beep();   // LEDC independente do XCLL — não perturba a câmera
+
+            // --- FASE DE CAPTURA: só DMA + CPU da inferência/encode no buffer
+            //     segurado. NADA de rede ou SD aqui dentro. ---
+            evidence_t ev[MAX_EVIDENCE];
+            int ev_n = 0;
+            int64_t tcap = esp_timer_get_time();
+            while (ev_n < MAX_EVIDENCE &&
+                   (esp_timer_get_time() - tcap) < (int64_t)EVIDENCE_TOTAL_WINDOW_MS * 1000) {
+                evidence_t e;
+                if (capture_evidence_clean(&e, confirmed_score)) {
+                    ev[ev_n++] = e;
+                }
+                // Espaçamento p/ mostrar deslocamento entre evidências.
+                if (ev_n < MAX_EVIDENCE) vTaskDelay(pdMS_TO_TICKS(EVIDENCE_SPACING_MS));
+            }
+
+            // --- SÓ AGORA: rede e SD, FORA da janela de captura ---
+            bool ok_any = false;
+            for (int i = 0; i < ev_n; i++) {
+                esp_err_t up = upload_image(ev[i].jpg, ev[i].len, ev[i].score,
+                                            ev[i].bx, ev[i].by, ev[i].bw, ev[i].bh);
+                if (up == ESP_OK) ok_any = true;
+                save_detection_to_sd(ev[i].jpg, ev[i].len, ev[i].score,
+                                     ev[i].bx, ev[i].by, ev[i].bw, ev[i].bh);
+            }
+            evidence_free_all(ev, ev_n);
+
+            if (ev_n > 0) {
+                if (ok_any) { backend_fail_count = 0; backend_offline = false; }
+                else { backend_fail_count++; if (backend_fail_count >= 10) backend_offline = true; }
+            }
+
+            s_btn_trigger = false;  // limpa gatilhos acumulados durante a captura
+            update_display();
+            state = ST_COOLDOWN;
+            cooldown_start = esp_timer_get_time();
+            break;
+        }
+
+        // ---------- COOLDOWN: ignora gatilhos por um tempo ----------
+        case ST_COOLDOWN: {
+            g_state_str = "COOLDOWN";
+            if ((esp_timer_get_time() - cooldown_start) >= (int64_t)COOLDOWN_MS * 1000) {
+                s_btn_trigger = false;
+                state = ST_IDLE;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            break;
+        }
+        }
+
+        // Tarefas periódicas: SÓ em repouso/cooldown. Nunca entre a
+        // confirmação (ST_VERIFY) e a captura (ST_EVIDENCE) — um fetch_config
+        // HTTP nesse intervalo atrasaria a evidência e geraria tráfego WiFi
+        // às portas da janela de captura.
+        if (state == ST_IDLE || state == ST_COOLDOWN) {
+            if ((xTaskGetTickCount() - last_fetch) > pdMS_TO_TICKS(30000)) {
+                fetch_config();
+                last_fetch = xTaskGetTickCount();
+            }
+            if ((xTaskGetTickCount() - last_disp) > pdMS_TO_TICKS(2000)) {
+                update_display();
+                last_disp = xTaskGetTickCount();
+            }
+        }
     }
 }
 
@@ -905,158 +1142,15 @@ extern "C" void app_main(void) {
     s_detect = new PedestrianDetect();
     if (!s_detect) { ESP_LOGE(TAG, "Detector falhou"); return; }
 
-    button_init();          // gatilho por botão (GPIO45)
+    button_init();          // gatilho de presença (PIR no GPIO41)
     fetch_config();
 
-    typedef enum { ST_IDLE, ST_VERIFY, ST_COOLDOWN } guard_state_t;
-    guard_state_t state = ST_IDLE;
-    g_state_str = "ARMADO";
-
-    TickType_t last_fetch = xTaskGetTickCount();
-    TickType_t last_disp  = 0;
-    int64_t cooldown_start = 0;
-
-    s_btn_trigger = false;  // ignora qualquer gatilho acumulado no boot
-
-    while (1) {
-        switch (state) {
-
-        // ---------- REPOUSO: câmera quente, inferência desligada ----------
-        case ST_IDLE: {
-            g_detected = false;
-            g_state_str = enable_detection ? "ARMADO" : "DESARMADO";
-
-            if (enable_detection && trigger_fired()) {
-                state = ST_VERIFY;
-                g_state_str = "VERIFICANDO";
-                break;
-            }
-            // Keep-alive: drena 1 frame para manter AEC/AWB adaptando e o
-            // pipeline fresco, SEM rodar inferência (barato). Garante que o
-            // primeiro frame pós-gatilho já esteja bem exposto.
-            if (enable_detection) {
-                camera_fb_t *fb = esp_camera_fb_get();
-                if (fb) esp_camera_fb_return(fb);
-            }
-            vTaskDelay(pdMS_TO_TICKS(KEEPALIVE_MS));
-            break;
-        }
-
-        // ---------- VERIFICAÇÃO: confirma presença rapidamente ----------
-        case ST_VERIFY: {
-            evidence_t ev[MAX_EVIDENCE];
-            int  ev_n = 0;
-            int  hits = 0;
-            bool confirmed = false;
-            int  frames = 0;
-            int64_t t0 = esp_timer_get_time();
-
-            while (!confirmed && frames < VERIFY_MAX_FRAMES &&
-                   (esp_timer_get_time() - t0) < (int64_t)VERIFY_WINDOW_MS * 1000) {
-                float sc = 0; int bx = 0, by = 0, bw = 0, bh = 0;
-                uint8_t *jpg = NULL; size_t len = 0;
-                bool hit = detect_once(&sc, &bx, &by, &bw, &bh, &jpg, &len, true);
-                frames++;
-
-                if (hit) {
-                    hits++;
-                    if (jpg) {
-                        if (ev_n < MAX_EVIDENCE) {
-                            ev[ev_n].jpg = jpg; ev[ev_n].len = len; ev[ev_n].score = sc;
-                            ev[ev_n].bx = bx; ev[ev_n].by = by; ev[ev_n].bw = bw; ev[ev_n].bh = bh;
-                            ev_n++;
-                        } else {
-                            // já cheio: troca a de menor score se esta for melhor
-                            int lo = 0;
-                            for (int i = 1; i < ev_n; i++) if (ev[i].score < ev[lo].score) lo = i;
-                            if (sc > ev[lo].score) {
-                                free(ev[lo].jpg);
-                                ev[lo].jpg = jpg; ev[lo].len = len; ev[lo].score = sc;
-                                ev[lo].bx = bx; ev[lo].by = by; ev[lo].bw = bw; ev[lo].bh = bh;
-                            } else {
-                                free(jpg);
-                            }
-                        }
-                    }
-                    // Caminho rápido: 1 frame muito confiante confirma na hora.
-                    if (sc >= HIGH_CONFIDENCE || hits >= CONFIRM_HITS) confirmed = true;
-                } else if (jpg) {
-                    free(jpg);  // segurança (não deveria ocorrer)
-                }
-                vTaskDelay(pdMS_TO_TICKS(1));  // cede CPU / alimenta watchdog
-            }
-
-            if (confirmed) {
-                ESP_LOGI(TAG, "INTRUSO confirmado (%d acerto(s) em %d frame(s))", hits, frames);
-                g_detected = true;
-                g_state_str = "INTRUSO";
-                g_last_score = (ev_n > 0) ? ev[0].score : 0.0f;
-                buzzer_beep();
-
-                // Completa evidências (mostra deslocamento) se confirmou cedo.
-                int64_t tu0 = esp_timer_get_time();
-                while (ev_n < MAX_EVIDENCE &&
-                       (esp_timer_get_time() - tu0) < (int64_t)TOPUP_WINDOW_MS * 1000) {
-                    vTaskDelay(pdMS_TO_TICKS(EVIDENCE_SPACING_MS));
-                    float sc = 0; int bx = 0, by = 0, bw = 0, bh = 0;
-                    uint8_t *jpg = NULL; size_t len = 0;
-                    if (detect_once(&sc, &bx, &by, &bw, &bh, &jpg, &len, true) && jpg) {
-                        ev[ev_n].jpg = jpg; ev[ev_n].len = len; ev[ev_n].score = sc;
-                        ev[ev_n].bx = bx; ev[ev_n].by = by; ev[ev_n].bw = bw; ev[ev_n].bh = bh;
-                        ev_n++;
-                    } else if (jpg) {
-                        free(jpg);
-                    }
-                }
-
-                // Envia todas as evidências (sequência implícita pela ordem).
-                bool ok_any = false;
-                for (int i = 0; i < ev_n; i++) {
-                    esp_err_t up = upload_image(ev[i].jpg, ev[i].len, ev[i].score,
-                                                ev[i].bx, ev[i].by, ev[i].bw, ev[i].bh);
-                    if (up == ESP_OK) ok_any = true;
-                    save_detection_to_sd(ev[i].jpg, ev[i].len, ev[i].score,
-                                         ev[i].bx, ev[i].by, ev[i].bw, ev[i].bh);
-                }
-                evidence_free_all(ev, ev_n);
-
-                if (ok_any) { backend_fail_count = 0; backend_offline = false; }
-                else { backend_fail_count++; if (backend_fail_count >= 10) backend_offline = true; }
-
-                state = ST_COOLDOWN;
-                cooldown_start = esp_timer_get_time();
-            } else {
-                ESP_LOGI(TAG, "Falso positivo: presenca nao confirmada (%d frame(s))", frames);
-                evidence_free_all(ev, ev_n);   // descarta — nada é enviado
-                g_detected = false;
-                state = ST_IDLE;
-            }
-            s_btn_trigger = false;  // limpa gatilhos acumulados durante a verificação
-            update_display();
-            break;
-        }
-
-        // ---------- COOLDOWN: ignora gatilhos por um tempo ----------
-        case ST_COOLDOWN: {
-            g_state_str = "COOLDOWN";
-            if ((esp_timer_get_time() - cooldown_start) >= (int64_t)COOLDOWN_MS * 1000) {
-                s_btn_trigger = false;
-                state = ST_IDLE;
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-            break;
-        }
-        }
-
-        // Tarefas periódicas (independem do estado; se auto-limitam pelo tick).
-        if ((xTaskGetTickCount() - last_fetch) > pdMS_TO_TICKS(30000)) {
-            fetch_config();
-            last_fetch = xTaskGetTickCount();
-        }
-        if ((xTaskGetTickCount() - last_disp) > pdMS_TO_TICKS(2000)) {
-            update_display();
-            last_disp = xTaskGetTickCount();
-        }
-    }
+    // FSM de vigilância FIXADA no core 1 (APP_CPU). O WiFi roda no core 0
+    // (PRO_CPU), então a pilha de rede não preempta a captura/inferência.
+    // Combine com os ajustes de sdkconfig (WiFi em IRAM, PSRAM Octal 80 MHz,
+    // código fora da PSRAM) para reduzir as faltas de cache na flash que
+    // disputam o controlador MSPI com o DMA da câmera.
+    // Stack generoso (16 KB) para acomodar a inferência ESP-DL + fmt2jpg;
+    // reduza se confirmar folga, aumente se vir stack overflow.
+    xTaskCreatePinnedToCore(guard_task, "guard", 16384, NULL, 5, NULL, 1);
 }

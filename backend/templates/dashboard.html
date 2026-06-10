@@ -631,10 +631,8 @@
   // ── Estado ──────────────────────────────────────────────────────────────
   let lastKnownId = null;
   let allDetections = [];
-  let lastStatuses = [];
   let currentFilter = 'all';
   let online = false;
-  let polling = false;
 
   // ── Clock ────────────────────────────────────────────────────────────────
   function updateClock() {
@@ -667,13 +665,6 @@
     return 'low';
   }
 
-  // Escapa texto antes de injetar via innerHTML (defesa básica de markup).
-  function esc(str) {
-    return String(str).replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
-  }
-
   // ── Badge de score ───────────────────────────────────────────────────────
   function scoreBadgeLabel(s) {
     if (s >= 0.85) return (s * 100).toFixed(0) + '%';
@@ -686,23 +677,23 @@
     card.className = 'img-card' + (isNew ? ' newest' : '');
     card.dataset.id = d.id;
 
-    const imgUrl  = `${BACKEND}/uploads/${encodeURIComponent(d.filename)}`;
-    const barW    = Math.round((d.score || 0) * 100);
-    const sc      = d.score || 0;
+    const imgUrl  = `${BACKEND}/uploads/${d.filename}`;
+    const barW    = Math.round(d.score * 100);
+    const sc      = d.score;
     const sClass  = scoreClass(sc);
 
     card.innerHTML = `
       <div class="img-wrap">
-        <img src="${imgUrl}" alt="Deteccao ${d.id}" class="loading"
+        <img src="${imgUrl}" alt="Detecção ${d.id}" class="loading"
              onload="this.classList.remove('loading')"
              onerror="this.src=''; this.style.opacity='0.2'">
-        ${d.box ? buildBboxSvg(d) : ''}
+        ${d.box ? buildBboxSvg(d.box) : ''}
         <div class="img-badge ${sClass}">${scoreBadgeLabel(sc)}</div>
         <div class="score-bar" style="width:${barW}%"></div>
       </div>
       <div class="img-meta">
         <div class="img-device">
-          ${esc(String(d.device_id).slice(-6))}
+          ${d.device_id.slice(-6)}
           <span>#${d.id}</span>
         </div>
         <div class="img-ts">${fmtTs(d.timestamp)}</div>
@@ -713,15 +704,11 @@
     return card;
   }
 
-  function buildBboxSvg(d) {
-    const [bx, by, bw, bh] = String(d.box).split(',').map(Number);
-    // O viewBox precisa casar com a resolução REAL em que a box foi calculada.
-    // O firmware captura XGA (1024x768); usamos frame_w/frame_h quando vierem
-    // do backend e caímos para 1024x768 como padrão seguro.
-    const fw = d.frame_w || 1024;
-    const fh = d.frame_h || 768;
+  function buildBboxSvg(boxStr) {
+    const [bx, by, bw, bh] = boxStr.split(',').map(Number);
+    // A câmera captura VGA (640x480); mapeamos para o viewBox da imagem
     return `
-      <svg class="bbox-svg" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none">
+      <svg class="bbox-svg" viewBox="0 0 640 480" preserveAspectRatio="none">
         <rect class="bbox-rect" x="${bx}" y="${by}" width="${bw}" height="${bh}"/>
       </svg>`;
   }
@@ -757,21 +744,22 @@
     const newCards = filtered.filter(d => !existingIds.has(d.id));
     const isFirstLoad = existingIds.size === 0;
 
-    if (newCards.length > 0 && !isFirstLoad) {
-      // insere no início
+    if (isFirstLoad) {
+      // primeiro load: renderiza tudo de uma vez
+      grid.innerHTML = '';
+      filtered.slice(0, MAX_SHOW).forEach(d => grid.appendChild(renderCard(d, false)));
+    } else if (newCards.length > 0) {
+      // apenas insere os cards novos no topo; o restante fica intocado
       newCards.reverse().forEach(d => {
         grid.insertBefore(renderCard(d, true), grid.firstChild);
       });
-      // remove excedentes
+      // remove excedentes do final
       const allCards = grid.querySelectorAll('.img-card');
       if (allCards.length > MAX_SHOW) {
         for (let i = MAX_SHOW; i < allCards.length; i++) allCards[i].remove();
       }
-    } else {
-      // primeiro load: renderiza tudo
-      grid.innerHTML = '';
-      filtered.slice(0, MAX_SHOW).forEach(d => grid.appendChild(renderCard(d, false)));
     }
+    // sem novidades: não toca no grid
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -780,33 +768,35 @@
     const todayDets = allDetections.filter(d => new Date(d.timestamp).toDateString() === today);
     const highConf  = todayDets.filter(d => d.score >= 0.85);
 
-    // Conta dispositivos a partir do /status (presença real). Se /status não
-    // respondeu, cai para os IDs presentes nas detecções.
-    const deviceCount = lastStatuses.length > 0
-      ? lastStatuses.length
-      : new Set(allDetections.map(d => d.device_id)).size;
+    const devices = new Set(allDetections.map(d => d.device_id));
 
     document.getElementById('stat-total').textContent = todayDets.length;
     document.getElementById('stat-high').textContent  = highConf.length;
-    document.getElementById('stat-devices').textContent = deviceCount;
+    document.getElementById('stat-devices').textContent = devices.size;
 
     if (allDetections.length > 0) {
       const latest = allDetections[0];
       document.getElementById('stat-last').textContent = fmtRelative(latest.timestamp);
-      document.getElementById('stat-last-device').textContent = 'ID: ' + String(latest.device_id).slice(-6);
+      document.getElementById('stat-last-device').textContent = 'ID: ' + latest.device_id.slice(-6);
     }
   }
 
   // ── Sidebar device ────────────────────────────────────────────────────────
-  function updateSidebarDevice() {
-    if (lastStatuses.length === 0) return;
-    const dev = lastStatuses[0];
-    document.getElementById('device-panel').style.display = '';
-    document.getElementById('sidebar-device-id').textContent = dev.device_id;
-    document.getElementById('sidebar-last-seen').textContent =
-      dev.last_seen ? fmtRelative(dev.last_seen) : '—';
-    document.getElementById('sidebar-last-score').textContent =
-      dev.last_score != null ? (dev.last_score * 100).toFixed(1) + '%' : '—';
+  async function updateSidebarDevice() {
+    try {
+      const r = await fetch(`${BACKEND}/status`);
+      if (!r.ok) return;
+      const statuses = await r.json();
+      if (statuses.length > 0) {
+        const dev = statuses[0];
+        document.getElementById('device-panel').style.display = '';
+        document.getElementById('sidebar-device-id').textContent = dev.device_id;
+        document.getElementById('sidebar-last-seen').textContent =
+          dev.last_seen ? fmtRelative(dev.last_seen) : '—';
+        document.getElementById('sidebar-last-score').textContent =
+          dev.last_score != null ? (dev.last_score * 100).toFixed(1) + '%' : '—';
+      }
+    } catch (e) {}
   }
 
   // ── Alert ─────────────────────────────────────────────────────────────────
@@ -846,8 +836,6 @@
 
   // ── Polling ───────────────────────────────────────────────────────────────
   async function poll() {
-    if (polling) return;            // evita ciclos sobrepostos se a rede travar
-    polling = true;
     try {
       const r = await fetch(`${BACKEND}/images?limit=50`);
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -868,20 +856,12 @@
       allDetections = data;
       if (topId !== null) lastKnownId = topId;
 
-      // Uma única consulta de presença por ciclo, compartilhada por stats/sidebar.
-      try {
-        const sr = await fetch(`${BACKEND}/status`);
-        lastStatuses = sr.ok ? await sr.json() : [];
-      } catch (e) { lastStatuses = []; }
-
       refreshGrid();
       updateStats();
       updateSidebarDevice();
 
     } catch (e) {
       setOnline(false);
-    } finally {
-      polling = false;
     }
   }
 
@@ -918,8 +898,7 @@
 
   // ── Start ─────────────────────────────────────────────────────────────────
   poll();
-  setInterval(() => { if (!document.hidden) poll(); }, POLL_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  setInterval(poll, POLL_MS);
 </script>
 </body>
 </html>
