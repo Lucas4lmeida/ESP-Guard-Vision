@@ -633,7 +633,7 @@ static esp_err_t camera_init(void) {
     cfg.pin_pclk = 13;
 
     // OV5640 PRECISA de 20MHz para gerar RGB565 válido para a IA
-    cfg.xclk_freq_hz = 20000000;
+    cfg.xclk_freq_hz = 24000000;
 
     cfg.ledc_timer = LEDC_TIMER_0;
     cfg.ledc_channel = LEDC_CHANNEL_0;
