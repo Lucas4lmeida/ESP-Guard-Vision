@@ -507,6 +507,7 @@
         <span>Backend: <b id="conn-text">conectando…</b></span>
       </div>
       <div class="clock" id="clock">--:--:--</div>
+      <div style="font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--muted);opacity:0.6;">ui v2.2</div>
     </div>
   </header>
 
@@ -643,8 +644,16 @@
   updateClock();
 
   // ── Helpers ──────────────────────────────────────────────────────────────
+  // O backend grava em UTC. Se a string vier sem marcação de fuso (sem 'Z' nem
+  // offset), o navegador a interpretaria como horário LOCAL — mostrando UTC cru,
+  // 3h adiantado. Normalizamos: sem fuso explícito = UTC.
+  function parseTs(iso) {
+    if (typeof iso === 'string' && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)) iso += 'Z';
+    return new Date(iso);
+  }
+
   function fmtTs(iso) {
-    const d = new Date(iso);
+    const d = parseTs(iso);
     return d.toLocaleString('pt-BR', {
       day: '2-digit', month: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
@@ -652,7 +661,7 @@
   }
 
   function fmtRelative(iso) {
-    const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+    const diff = Math.floor((Date.now() - parseTs(iso)) / 1000);
     if (diff < 5)   return 'agora mesmo';
     if (diff < 60)  return `${diff}s atrás`;
     if (diff < 3600) return `${Math.floor(diff/60)}min atrás`;
@@ -706,9 +715,9 @@
 
   function buildBboxSvg(boxStr) {
     const [bx, by, bw, bh] = boxStr.split(',').map(Number);
-    // A câmera captura VGA (640x480); mapeamos para o viewBox da imagem
+    // O firmware captura em XGA (1024x768); as boxes chegam neste espaço
     return `
-      <svg class="bbox-svg" viewBox="0 0 640 480" preserveAspectRatio="none">
+      <svg class="bbox-svg" viewBox="0 0 1024 768" preserveAspectRatio="none">
         <rect class="bbox-rect" x="${bx}" y="${by}" width="${bw}" height="${bh}"/>
       </svg>`;
   }
@@ -737,35 +746,42 @@
     }
 
     // Preserva cards existentes, insere novos no topo
-    const existingIds = new Set(
-      [...grid.querySelectorAll('.img-card')].map(el => Number(el.dataset.id))
-    );
-
-    const newCards = filtered.filter(d => !existingIds.has(d.id));
-    const isFirstLoad = existingIds.size === 0;
+    const existingIds = [...grid.querySelectorAll('.img-card')]
+      .map(el => Number(el.dataset.id));
+    const isFirstLoad = existingIds.length === 0;
 
     if (isFirstLoad) {
-      // primeiro load: renderiza tudo de uma vez
+      // primeiro load (ou troca de filtro): renderiza tudo de uma vez
       grid.innerHTML = '';
       filtered.slice(0, MAX_SHOW).forEach(d => grid.appendChild(renderCard(d, false)));
-    } else if (newCards.length > 0) {
-      // apenas insere os cards novos no topo; o restante fica intocado
-      newCards.reverse().forEach(d => {
-        grid.insertBefore(renderCard(d, true), grid.firstChild);
-      });
-      // remove excedentes do final
-      const allCards = grid.querySelectorAll('.img-card');
-      if (allCards.length > MAX_SHOW) {
-        for (let i = MAX_SHOW; i < allCards.length; i++) allCards[i].remove();
-      }
+      return;
     }
-    // sem novidades: não toca no grid
+
+    // "Novo" = ID ESTRITAMENTE MAIOR que o maior ID já exibido.
+    // (Antes era "qualquer ID fora do DOM", o que reciclava eternamente as
+    // linhas 21..50 da resposta — o grid só mantém MAX_SHOW=20 — causando a
+    // troca de imagens a cada poll.)
+    const maxDisplayedId = Math.max(...existingIds);
+    const newCards = filtered.filter(d => d.id > maxDisplayedId);
+
+    if (newCards.length === 0) return;   // sem novidades: não toca no grid
+
+    grid.querySelectorAll('.img-card.newest').forEach(el => el.classList.remove('newest'));
+
+    // insere do mais antigo para o mais novo, para o mais novo terminar no topo
+    newCards.sort((a, b) => a.id - b.id).forEach(d => {
+      grid.insertBefore(renderCard(d, true), grid.firstChild);
+    });
+
+    // remove excedentes do final
+    const allCards = grid.querySelectorAll('.img-card');
+    for (let i = MAX_SHOW; i < allCards.length; i++) allCards[i].remove();
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
   function updateStats() {
     const today = new Date().toDateString();
-    const todayDets = allDetections.filter(d => new Date(d.timestamp).toDateString() === today);
+    const todayDets = allDetections.filter(d => parseTs(d.timestamp).toDateString() === today);
     const highConf  = todayDets.filter(d => d.score >= 0.85);
 
     const devices = new Set(allDetections.map(d => d.device_id));
